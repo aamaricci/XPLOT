@@ -1,0 +1,28 @@
+***************************** PLOT ******************************
+**                      XmGrace from command-line              **
+**                      Adriano Amaricci 2012-13               **
+*****************************************************************
+
+[... |] xplot [options] [files]
+Options:   -x<min:max>   x-interval    -x0:10
+           -y<min:max>   y-interval    -y-2.5:0.75
+           -lx           x log-scale 
+           -ly           y log-scale 
+           -lw           line width 
+           -u<C1:C2,>    x,y columns   -u1:3; -u1:2,1:3; -uall; -uone/-u1
+           -m[w:h]      set fixed window format (default free)[wdith:height]
+           -show        print cmd line on std.out
+           -s<file>     save output to file.agr
+           -t<string>   set title
+           -xt<string>  set x-label
+           -yt<string>  set y-label
+           -l           legend on
+           -d           legend on using directories
+           -k           y-axis stride for data sets
+           -w<l,p,lp>   set line type:line,points
+           -c<C1:C2>    use a gradient between color C1 [black ]and color C2 [red];
+           -h           this help
+
+Examples:  plot data
+           plot -u1:3 -x-1:1 data.1* -u1:2  data.0
+           cat data | plot -uall
