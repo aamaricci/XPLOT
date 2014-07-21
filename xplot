@@ -1333,7 +1333,7 @@ foreach $f (@ARGV){		# over all arguments
 	if ($mblock){
 	    my $line;
 	    my $fcount=0;
-	    my $outf=$tmpdir . "output."; 
+	    my $outf=$tmpdir."output.".int(rand(1000)).".";
 	    @foname[$fcount]=$outf.$fcount;
 	    open(FOUT, ">".@foname[$fcount]);
 	    open(FIN, "$f");
