@@ -3,6 +3,8 @@ use File::Basename;
 use File::Temp;
 use File::Spec;
 use Archive::Extract;
+use Math::Trig;			# includes trigonometric functions
+use Math::Complex;		# includes support for complex 
 #THIS SCRIPT IS A PERL INTERFACE TO XMGRACE DATA PLOT PROGRAM
 #FOR MORE INFO CALL xplot WITH -h  OPTION
 
@@ -949,7 +951,7 @@ use Archive::Extract;
 $home = $ENV{HOME};
 $login=getpwuid($<);
 $tmpdir="/tmp/";
-$ran=int(rand(100));
+$ran=int(rand(10000));
 $cfgfile= "$home/.grace/gracerc.user";
 $fbatch= $tmpdir."xgbatch.".$ran.".".$login  ; #$new File::Temp( UNLINK => 1, DIR=> $home);
 
@@ -1037,12 +1039,14 @@ if ($stdin ne "1"){
 }
 
 
+
+
 $i=0;
 foreach $f (@ARGV){  
   my ($dir, $name, $ext) = fileparse($f, ".gz");
   if($ext eq ".gz"){
     $i++;
-    my $tmp = $tmpdir."xgz".int(rand(100)).".".$login;
+    my $tmp = $tmpdir."xgz".int(rand(10000)).".".$login;
     @gzfiles[$i]=$tmp;
     my $ae = Archive::Extract->new( archive => $f );
     my $ok = $ae->extract( to => $tmp );
@@ -1051,6 +1055,18 @@ foreach $f (@ARGV){
     s/^$f$// for @ARGV;
   };
 };
+
+
+
+
+#DIVIDE OPTIONS ARGUMENTS FROM ACTUAL FILES
+foreach (@ARGV){
+    if (-e "$_"){	    # if it exists  it is a file
+	push @files, $_;
+    } else{
+	push @options, $_;   # otherwise it is an option
+    }
+}
 
 
 #OPEN THE XMGRACE BATCH FILE
@@ -1067,19 +1083,21 @@ $progE = "";
 $prog  = "";
 $with = "l";			# define whether to use lines 
 $lcount=-1;
-$i = 0;
 $numsets=0;
 $cstart='black';
 $cstop='red';
 
-
-#LOOP OVER ALL ARGUMENTS: CAN BE OPTIONS OR ACTUAL DATA FILE TO PLOT
-foreach $f (@ARGV){		# over all arguments
-  if ($f eq ""){next;};
+$i = 0;
+#LOOP OVER ALL OPTIONS:
+foreach $f (@ARGV) {
+  if ($f eq "") {
+    next;
+  }
+  ;
   
   $i++;
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-h") { # print help
     print "***************************** PLOT ******************************\n";
     print "**                      XmGrace from command-line              **\n";
@@ -1092,29 +1110,30 @@ foreach $f (@ARGV){		# over all arguments
     print "           -lx           x log-scale \n";
     print "           -ly           y log-scale \n";
     print "           -lw           line width \n";
-    print "           -u<C1:C2,>    x,y columns   -u1:3; -u1:2,1:3; -uall; -uone/-u1\n";
-    print "           -m[w:h]      set fixed window format (default free)[wdith:height]\n";
-    print "           -show        print cmd line on std.out\n";
-    print "           -s<file>     save output to file.agr\n";
-    print "           -t<string>   set title\n";
-    print "           -xt<string>  set x-label\n";
-    print "           -yt<string>  set y-label\n";
-    print "           -l           legend on\n";
-    print "           -d           legend on using directories\n";
-    print "           -k           y-axis stride for data sets\n";
-    print "           -w<l,p,lp>   set line type:line,points\n";
-    print "           -c<C1:C2>    use a gradient between color C1 [black ]and color C2 [red];\n";
-    print "           -h           this help\n";
+    print "           -uX:Yn/F(Yn)  x,y  nth-columns -u1:3; -u1:2,1:3; -uall; -uone/-u1; -u1:\'cos(\$2)\'\n";
+    print "           -m[w:h]       set fixed window format (default free)[wdith:height]\n";
+    print "           -show         print cmd line on std.out\n";
+    print "           -s<file>      save output to file.agr\n";
+    print "           -t<string>    set title\n";
+    print "           -xt<string>   set x-label\n";
+    print "           -yt<string>   set y-label\n";
+    print "           -l            legend on\n";
+    print "           -d            legend on using directories\n";
+    print "           -k            y-axis stride for data sets\n";
+    print "           -w<l,p,lp>    set line type:line,points\n";
+    print "           -c<C1:C2>     use a gradient between color C1 [black ]and color C2 [red];\n";
+    print "           -h            this help\n";
     print "\n";
     print "Examples:  plot data\n";
     print "           plot -u1:3 -x-1:1 data.1* -u1:2  data.0\n";
     print "           cat data | plot -uall\n";
+    print "           seq -f%1.4f 0 0.01 6.28 |plot -u1:'cos(\$1)' -show\n";
     exit;
   }
   ;
 
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f, 0, 5) eq "-show") { # show cmd line
     $ishow=1;
     next;
@@ -1122,7 +1141,7 @@ foreach $f (@ARGV){		# over all arguments
   ;
 
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f,0,2) eq "-m") { # standard format
     $prog1 = " ";
     $range = substr($f, 2);
@@ -1137,7 +1156,7 @@ foreach $f (@ARGV){		# over all arguments
   ;
 
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-s") { # -s save to agr file
     $fullname = substr($f, 2);
     ($file,$dir,$ext) = fileparse($fullname, qr/\.[^.]*/);
@@ -1147,15 +1166,16 @@ foreach $f (@ARGV){		# over all arguments
   ;
 
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 2) eq "-k"){#add a stride to data with increasing order
-	$addshift=1;
-	$shift=substr($f,2);
-	next;
-    };
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 2) eq "-k") { #add a stride to data with increasing order
+    $addshift=1;
+    $shift=substr($f,2);
+    next;
+  }
+  ;
 
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-lx") { # -lt set log scale on x-axis
     print FBATCH "xaxes scale logarithmic\n";
     next;
@@ -1163,7 +1183,7 @@ foreach $f (@ARGV){		# over all arguments
   ;
 
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-ly") { # -lt set log scale on y-axis
     print FBATCH "yaxes scale logarithmic\n";
     next;
@@ -1172,7 +1192,7 @@ foreach $f (@ARGV){		# over all arguments
 
 
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-t") { # -t add title
     $title=substr($f,2);
     print FBATCH "subtitle \"$title\"\n";
@@ -1182,7 +1202,7 @@ foreach $f (@ARGV){		# over all arguments
   ;
 
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-xt") { # -xt set the x-axes labels
     $label=substr($f,3);
     print FBATCH "xaxis label \"$label\"\n";
@@ -1191,7 +1211,7 @@ foreach $f (@ARGV){		# over all arguments
   ;
 
 
-#--------------------------------------------------------------------
+  #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-yt") { # -yt set the y-axes labels
     $label=substr($f,3);
     print FBATCH "yaxis label \"$label\"\n";
@@ -1200,248 +1220,339 @@ foreach $f (@ARGV){		# over all arguments
   ;
 
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 3) eq "-lw"){ # this sets linewidth
-	$linewidth = substr($f, 3);
-	next; 
-    };
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 3) eq "-lw") { # this sets linewidth
+    $linewidth = substr($f, 3);
+    next; 
+  }
+  ;
 
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 3) eq "-l") { # add legend to the plot
-	$addlegend=1;
-	$dirlegend=0;
-	next;
-    };
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 3) eq "-l") { # add legend to the plot
+    $addlegend=1;
+    $dirlegend=0;
+    next;
+  }
+  ;
 
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 2) eq "-d") { # use directory rather filenames in legend
-	$addlegend=1;
-	$dirlegend=1;
-	$ndir = substr($f, 2);
-	next;
-    };
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 2) eq "-d") { # use directory rather filenames in legend
+    $addlegend=1;
+    $dirlegend=1;
+    $ndir = substr($f, 2);
+    next;
+  }
+  ;
 
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 2) eq "-w"){ # this sets plotting style, for example
-	$with = substr($f, 2); # -wl plots with lines, -wlp with lines and points
-	next; # -wsteps with steps. Here any gnuplot command can be used
-    };
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 2) eq "-w") { # this sets plotting style, for example
+    $with = substr($f, 2); # -wl plots with lines, -wlp with lines and points
+    next;   # -wsteps with steps. Here any gnuplot command can be used
+  }
+  ;
 
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 2) eq "-x"){ # x-range can be set here
-	$xr = substr($f, 2);
-	@parts = split(/:/,$xr);	    	
-	$xmin=@parts[0];
-	$xmax=@parts[1];
-	print FBATCH "world xmin $xmin\n";
-	print FBATCH "world xmax $xmax\n";
-	$noautoscale=0;
-	next;
-    };
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 2) eq "-x") { # x-range can be set here
+    $xr = substr($f, 2);
+    @parts = split(/:/,$xr);	    	
+    $xmin=@parts[0];
+    $xmax=@parts[1];
+    print FBATCH "world xmin $xmin\n";
+    print FBATCH "world xmax $xmax\n";
+    $noautoscale=0;
+    next;
+  }
+  ;
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 2) eq "-y"){ # y-range
-	$yr = substr($f, 2);
-	$autoscaley="";
-	@parts = split(/:/,$yr);	    	
-	$ymin=@parts[0];
-	$ymax=@parts[1];
-	print FBATCH "world ymin $ymin\n";
-	print FBATCH "world ymax $ymax\n";
-	$noautoscale=0;
-	next;
-    };
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 2) eq "-y") { # y-range
+    $yr = substr($f, 2);
+    $autoscaley="";
+    @parts = split(/:/,$yr);	    	
+    $ymin=@parts[0];
+    $ymax=@parts[1];
+    print FBATCH "world ymin $ymin\n";
+    print FBATCH "world ymax $ymax\n";
+    $noautoscale=0;
+    next;
+  }
+  ;
 
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 2) eq "-c") { # x-range can be set here
-      $xr = substr($f, 2);
-      if ($xr eq 'list'){
-	test_x11_colors;
-	exit;
-      };
-      @colors = split(/:/,$xr);
-      if ($#colors >0){
-	$cstart=@colors[0];
-	$cstop=@colors[1];
-      }
-      else{
-	print "using default gradient colors: C1=black ; C2=red\n";
-      };
-      $usegrad=1;
-      next;
-    };
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 2) eq "-c") { # x-range can be set here
+    $xr = substr($f, 2);
+    if ($xr eq 'list') {
+      test_x11_colors;
+      exit;
+    }
+    ;
+    @colors = split(/:/,$xr);
+    if ($#colors >0) {
+      $cstart=@colors[0];
+      $cstop=@colors[1];
+    } else {
+      print "using default gradient colors: C1=black ; C2=red\n";
+    }
+    ;
+    $usegrad=1;
+    next;
+  }
+  ;
     
 
 
-#--------------------------------------------------------------------
-    if (substr($f, 0, 2) eq "-u"){ # this sets which columns will be plotted 
-	$using = substr($f, 2);	   # example of usage -u1:2,1:3,1:5
-	if ($using eq "all"){ # -uall means -u1:2,....1:n where n is number of all columns
-	    $all = "1";
-	}
-	elsif($using eq "one"){
-	    $nobatch=1;
-	    $#uss=-1;
-	}
-	elsif($using eq "1"){
-	    $nobatch=1;
-	    $#uss=-1;
-	}
-	else{
-	    $all = "0";
-	    $_ = $using;
-	    $#uss=-1;
-	    while (/([0-9]+(:[0-9]+)+)/g){
-		$uss[++$#uss] = "$1";
-	    }
-	}
-	next;
-    } 
-
-#--------------------------------------------------------------------
-# in case  all is 1, all columns in a file are plotted, equivalent to -u1:2,1:3,...,1:n
-    if ($all eq "1"){ 
-	open (G, "<$f");
-	while (<G>){
-	    if(/^[ |\t]*\#/) {next;}
-	    @temp = split(' ', $_);
-	    $nall = $#temp + 1;
-	    last;
-	}
-	close (G);
-	$#uss=-1;
-	for ($j=2; $j<=$nall; $j++){
-	    $uss[++$#uss] = "1:$j"; 
-	}
+  #--------------------------------------------------------------------
+  if (substr($f, 0, 2) eq "-u") { # this sets which columns will be plotted 
+    $using = substr($f, 2);	  # example of usage -u1:2,1:3,1:5
+      if ($using eq "all") { # -uall means -u1:2,....1:n where n is number of all columns
+      $all = "1";
+    } elsif ($using eq "one") {
+      $nobatch=1;
+      $#uss=-1;
+    } elsif ($using eq "1") {
+      $nobatch=1;
+      $#uss=-1;
+    } else {
+      $all = "0";
+      $_ = $using;
+      $#uss=-1;
+      @parts = split(/,/,$using);
+      foreach (@parts){
+	$uss[++$#uss]=$_;
+      }
+      # while (/([0-9]+(:[0-9]+)+)/g) {
+      # 	$uss[++$#uss] = "$1";
+      # }
     }
+    next;
+  } 
+
+  #--------------------------------------------------------------------
+  # in case  all is 1, all columns in a file are plotted, equivalent to -u1:2,1:3,...,1:n
+  if ($all eq "1") { 
+    open (G, "<$f");
+    while (<G>) {
+      if (/^[ |\t]*\#/) {
+	next;
+      }
+      @temp = split(' ', $_);
+      $nall = $#temp + 1;
+      last;
+    }
+    close (G);
+    $#uss=-1;
+    for ($j=2; $j<=$nall; $j++) {
+      $uss[++$#uss] = "1:$j"; 
+    }
+  }
 
 
-#IF $f IS NOT AN OPTION THAN SHOULD BE A FILE TO BE PROCESSED:
+
+
+#PROCESS FILES TO BE PLOTTED USING PREVIOUS DEFINED OPTIONS:
 #--------------------------------------------------------------------
-    if ($#uss<0) {$uss[0]="1:2";}
-    for ($j = 0; $j <= $#uss; $j++){
 
-	undef $mblock;
-	$mblock=count_mblock($f);
+  if ($#uss<0) {
+    $uss[0]="1:2";
+  }
+  for ($j = 0; $j <= $#uss; $j++) {
 
-	#if multiblock file loop over blocks:
-	if ($mblock){
-	    my $line;
-	    my $fcount=0;
-	    my $outf=$tmpdir."output.".int(rand(1000))."."; 
-	    @foname[$fcount]=$outf.$fcount;
-	    open(FOUT, ">".@foname[$fcount]);
-	    open(FIN, "$f");
-	    foreach $line (<FIN>) {	# for each line
-		if( $line =~/^\s*$/ ) { # check if blank line
-		    $fcount++;	# increment encountered blank lines
-		    @foname[$fcount]=$outf.$fcount;
-		    close(FOUT);
-		    open(FOUT, ">".@foname[$fcount]);
-		};
-		print FOUT $line;
-	    };
-	    close FOUT;
-	    close FIN;
+    undef $mblock;
+    $mblock=count_mblock($f);
 
-	    #foreach $fo (@foname){
-	    for ($ii=0;$ii<=$#foname; $ii++){
-		$fo=@foname[$ii];
-		$lcount++;
-		$symbol=(1+$lcount) % 10 ;		
-		if ($addlegend){
-		    $fname=basename($f);
-		    if ($dirlegend){
-			$fname=dirname($f);
-			if ($ndir) {
-			    @dirs = File::Spec->splitdir( $fname );
-			    $fname="";
-			    for ($jj=1; $jj<=$ndir; $jj++){
-				$fname.=$dirs[$jj-1];
-				if($jj>1 and $jj<$ndir){$fname.="/"}
-			    };
-			};
-			if( $ndir >= $#dirs+1){
-			    $fname=dirname($f);
-			};
-		    };
-		    print FBATCH "S$lcount legend \"$fname.$ii $uss[$j]\" \n";
-		};
-		if ($with eq "l"){	    
-		    print FBATCH "S$lcount line type 1\n";
-		    print FBATCH "S$lcount symbol 0\n";
-		};
-		if ($with eq "p"){
-		    print FBATCH "S$lcount line type 0\n";
-		    print FBATCH "S$lcount symbol $symbol\n";
-		};
-		if ($with eq "lp"){
-		    print FBATCH "S$lcount line type 1\n";
-		    print FBATCH "S$lcount symbol $symbol\n";
-		};
-		if ($linewidth) {
-		    print FBATCH "S$lcount linewidth $linewidth\n";
-		};
-		if ($addshift) {
-		    print FBATCH "S$lcount.y = S$lcount.y + $shift*$lcount\n";
-		};
-		if($nobatch){$prog .= "\"$fo\"";}else{$prog .= "-block \"$fo\" -bxy $uss[$j] ";};
-	    };
+    #if multiblock file loop over blocks:
+    if ($mblock) {
+      my $line;
+      my $fcount=0;
+      my $outf=$tmpdir."output.".int(rand(10000)).".";
+      @foname[$fcount]=$outf.$fcount;
+      open(FOUT, ">".@foname[$fcount]);
+      open(FIN, "$f");
+      foreach $line (<FIN>) {	 # for each line
+	if ( $line =~/^\s*$/ ) { # check if blank line
+	  $fcount++;		 # increment encountered blank lines
+	  @foname[$fcount]=$outf.$fcount;
+	  close(FOUT);
+	  open(FOUT, ">".@foname[$fcount]);
+	}
+	;
+	print FOUT $line;
+      }
+      ;
+      close FOUT;
+      close FIN;
 
-	}else{
-	    $lcount++;
-	    $symbol=(1+$lcount) % 10 ;
-	    if ($addlegend){
-		$fname=basename($f);
-		if ($dirlegend){
-		    $fname=dirname($f);
-		    if ($ndir) {
-			@dirs = File::Spec->splitdir( $fname );
-			$fname="";
-			for ($jj=1; $jj<=$ndir; $jj++){
-			    $fname.=$dirs[$jj-1];
-			    if($jj>1 and $jj<$ndir){$fname.="/"}
-			};
-		    };
-		    if( $ndir >= $#dirs+1) {
-			$fname=dirname($f);
-		    };
-		};
-		print FBATCH "S$lcount legend \"$fname $uss[$j]\" \n";
-	    };	
-	    if ($with eq "l"){	    
-		print FBATCH "S$lcount line type 1\n";
-		print FBATCH "S$lcount symbol 0\n";
-	    };
-	    if ($with eq "p"){
-		print FBATCH "S$lcount line type 0\n";
-		print FBATCH "S$lcount symbol $symbol\n";
-	    };
-	    if ($with eq "lp"){
-		print FBATCH "S$lcount line type 1\n";
-		print FBATCH "S$lcount symbol $symbol\n";
-	    };
-	    if ($linewidth) {
-		print FBATCH "S$lcount linewidth $linewidth\n";
-	    };
-	    if ($addshift) {
-		print FBATCH "S$lcount.y = S$lcount.y + $shift*$lcount\n";
-	    };
-	    if($nobatch){$prog .= "\"$f\"";}else{$prog .= "-block \"$f\" -bxy $uss[$j] ";};
-	};
+      #foreach $fo (@foname){
+      for ($ii=0;$ii<=$#foname; $ii++) {
+	$fo=@foname[$ii];
+	$lcount++;
+	$symbol=(1+$lcount) % 10 ;		
+	if ($addlegend) {
+	  $fname=basename($f);
+	  if ($dirlegend) {
+	    $fname=dirname($f);
+	    if ($ndir) {
+	      @dirs = File::Spec->splitdir( $fname );
+	      $fname="";
+	      for ($jj=1; $jj<=$ndir; $jj++) {
+		$fname.=$dirs[$jj-1];
+		if ($jj>1 and $jj<$ndir) {
+		  $fname.="/";
+		}
+	      }
+	      ;
+	    }
+	    ;
+	    if ( $ndir >= $#dirs+1) {
+	      $fname=dirname($f);
+	    }
+	    ;
+	  }
+	  ;
+	  print FBATCH "S$lcount legend \"$fname.$ii $uss[$j]\" \n";
+	}
+	;
+	if ($with eq "l") {	    
+	  print FBATCH "S$lcount line type 1\n";
+	  print FBATCH "S$lcount symbol 0\n";
+	}
+	;
+	if ($with eq "p") {
+	  print FBATCH "S$lcount line type 0\n";
+	  print FBATCH "S$lcount symbol $symbol\n";
+	}
+	;
+	if ($with eq "lp") {
+	  print FBATCH "S$lcount line type 1\n";
+	  print FBATCH "S$lcount symbol $symbol\n";
+	}
+	;
+	if ($linewidth) {
+	  print FBATCH "S$lcount linewidth $linewidth\n";
+	}
+	;
+	if ($addshift) {
+	  print FBATCH "S$lcount.y = S$lcount.y + $shift*$lcount\n";
+	}
+	;
+	if ($nobatch) {
+	  $prog .= "\"$fo\"";
+	} else {
+	  $prog .= "-block \"$fo\" -bxy $uss[$j] ";
+	}
+	;
+      }
+      ;
+
+    } else {
+      $lcount++;
+      $symbol=(1+$lcount) % 10 ;
+
+      #treat operations on single columns:
+      undef $opeX;
+      undef $opeY;
+      $columns=$uss[$j];
+      @colop=split(/:/,$columns);	# split each column specification entry in parts separated by :
+      $colX=$colop[0];	# get the X-spec
+      $colY=$colop[1];	# get the Y-spec
+      if (!($colX =~ /^\d/ )) { # control if Col-spec if NOT a single digit number, than should be an operation
+	$opeX=$colX;		#store the Col-spec
+	$colX =~ s/[^\d+]//g;   #clean Col-spec from the opration, that is stored in $opeY
+	$opeX =~ s/\$(\d+)/S$lcount.x/g;
+      };
+      if (!($colY =~ /^\d/ )) {
+	$opeY=$colY;	
+	$colY =~ s/[^\d+]//g;
+	$opeY =~ s/\$(\d+)/S$lcount.y/g;
+      };
+      $uss[$j]=$colX.":".$colY;
+
+      
+      if ($addlegend) {
+	$fname=basename($f);
+	if ($dirlegend) {
+	  $fname=dirname($f);
+	  if ($ndir) {
+	    @dirs = File::Spec->splitdir( $fname );
+	    $fname="";
+	    for ($jj=1; $jj<=$ndir; $jj++) {
+	      $fname.=$dirs[$jj-1];
+	      if ($jj>1 and $jj<$ndir) {
+		$fname.="/";
+	      }
+	    }
+	    ;
+	  }
+	  ;
+	  if ( $ndir >= $#dirs+1) {
+	    $fname=dirname($f);
+	  }
+	  ;
+	}
+	;
+	print FBATCH "S$lcount legend \"$fname $columns\" \n";
+      }
+      ;	
+      if ($with eq "l") {	    
+	print FBATCH "S$lcount line type 1\n";
+	print FBATCH "S$lcount symbol 0\n";
+      }
+      ;
+      if ($with eq "p") {
+	print FBATCH "S$lcount line type 0\n";
+	print FBATCH "S$lcount symbol $symbol\n";
+      }
+      ;
+      if ($with eq "lp") {
+	print FBATCH "S$lcount line type 1\n";
+	print FBATCH "S$lcount symbol $symbol\n";
+      }
+      ;
+      if ($linewidth) {
+	print FBATCH "S$lcount linewidth $linewidth\n";
+      }
+      ;
+      if ($opeX) {
+	print FBATCH "S$lcount.x = $opeX\n";
+      }
+      ;
+      if ($opeY) {
+	if ($addshift) {
+	  print FBATCH "S$lcount.y = $opeY + $shift*$lcount\n";
+	} else {
+	  print FBATCH "S$lcount.y = $opeY\n";
+	}
+      } else {
+	if ($addshift) {
+	  print FBATCH "S$lcount.y = S$lcount.y + $shift*$lcount\n";
+	}
+      }
+      ;
 
 
-	($j != $#uss) && ($prog .= " "); # add spaces
-	if ($i <= $#ARGV){
-	    $prog .= " ";
-	};
-    };			  
-};# end the main loop over arguments and files
+      if ($nobatch) {
+	$prog .= "\"$f\"";
+      } else {
+	$prog .= "-block \"$f\" -bxy $uss[$j] ";
+      }
+      ;
+    }
+    ;
+
+    ($j != $#uss) && ($prog .= " "); # add spaces
+    if ($i <= $#ARGV) {
+      $prog .= " ";
+    }
+    ;
+  }
+  ;			  
+}
+;			  # end the main loop over arguments and files
 
 #Build up the cmd line:
 #--------------------------------------------------------------------
