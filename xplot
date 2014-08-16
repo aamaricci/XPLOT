@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 use File::Basename;
 use File::Temp;
-use File::Spec;
+#use File::Spec;
 use Archive::Extract;
 use Math::Trig;			# includes trigonometric functions
 use Math::Complex;		# includes support for complex 
@@ -9,9 +9,15 @@ use Math::Complex;		# includes support for complex
 #FOR MORE INFO CALL xplot WITH -h  OPTION
 
 
+#SETUP OF SOME GLOBAL VARIABLES USED IN THE REST OF THE SCRIPT
+$home = $ENV{HOME};
+$tmpdir='/tmp';
+$login=getpwuid($<);
+$cfgfile= "$home/.grace/gracerc.user";
+
+
 #THE MAIN PART OF THE CODE IS BELOW AFTER THE 
 #COLOR NAMES SETUP.
-
 
 #COLOR NAMES: THE DICTIONARY SETUP IS USED TO 
 #AVOID RELY ON PARTICULAR MODULE POSSIBLY NOT
@@ -945,34 +951,6 @@ use Math::Complex;		# includes support for complex
 		   'LightGreen '	   => [144,238,144],
 		  );
 
-
-
-#SETUP OF SOME GLOBAL VARIABLES USED IN THE REST OF THE SCRIPT
-$home = $ENV{HOME};
-$login=getpwuid($<);
-$tmpdir="/tmp/";
-$ran=int(rand(10000));
-$cfgfile= "$home/.grace/gracerc.user";
-$fbatch= $tmpdir."xgbatch.".$ran.".".$login  ; #$new File::Temp( UNLINK => 1, DIR=> $home);
-
-
-#FUNCTION AND ROUTINES USED LATER IN THE SCRIPT
-sub count_mblock{		# RETURN TRUE IF THE PASSED FILE CONTAINS MORE THAN ONE BLOCK SEPARATED   
-  my $array=$_[0];		# BY EITHER SPACE, TABS OR BLANK LINES
-    my $count=1;
-    open(FIN, "$array");
-    foreach $line (<FIN>) {
-	if( $line =~ /^\s*$/ ) {
-	    $count++;
-	};
-    };
-    close(FIN);
-    undef $var;
-    if($count>1){$var=1;};
-    return $var;
-};
-
-
 sub test_x11_colors{		# TEST X11 COLOR DICTIONARY
   print "Available color codes:";
   foreach my $key ( keys %x11_color_dict ) {
@@ -1020,12 +998,22 @@ sub Color_Gradient{		# FOR TWO GIVEN COLORS NAME RETURN THE STRING SEQUENCE FOR 
     $str1="map color ".($i+$stride)." to ($color[0],$color[1],$color[2]), \"grad".($i+($stride-1))."\"";
     $str.=$pexec."'$str1' "
   };
-  # print $str;
-  # print "\n";
   return $str;
 };
 
 
+##################################################################
+
+
+sub get_temp_filename {
+  my $template=$_[0];
+  my $fh = File::Temp->new(
+			   TEMPLATE => "$template".'.XXXXX',
+			   DIR => "$tmpdir",
+			  );
+  $tmp_files[++$#tmp_files]=$fh->filename;
+  return $fh->filename;
+}
 
 
 #DEAL WITH DATA ON STD.INPUT
@@ -1039,15 +1027,12 @@ if ($stdin ne "1"){
 }
 
 
-
-
 $i=0;
 foreach $f (@ARGV){  
   my ($dir, $name, $ext) = fileparse($f, ".gz");
   if($ext eq ".gz"){
     $i++;
-    my $tmp = $tmpdir."xgz".int(rand(10000)).".".$login;
-    @gzfiles[$i]=$tmp;
+    my $tmp = get_temp_filename('xgzip.'.$login);
     my $ae = Archive::Extract->new( archive => $f );
     my $ok = $ae->extract( to => $tmp );
     die $ae->error unless $ok;
@@ -1055,7 +1040,6 @@ foreach $f (@ARGV){
     s/^$f$// for @ARGV;
   };
 };
-
 
 
 
@@ -1069,8 +1053,57 @@ foreach (@ARGV){
 }
 
 
+#FUNCTION AND ROUTINES USED LATER IN THE SCRIPT
+sub count_mblock{		# RETURN TRUE IF THE PASSED FILE CONTAINS MORE THAN ONE BLOCK SEPARATED   
+  my $file=$_[0];		# BY EITHER SPACE, TABS OR BLANK LINES
+  $count_blocks=0;
+  open(FILE, "< $file") or die "can't open $file: $!";
+  $lnew="\n";
+  foreach (<FILE>) {
+    $lold=$lnew;
+    $lnew=$_;
+    if ( $lold =~ /^\s*$/ && !($lnew =~ /^\s*$/)) {
+      $count_blocks++;
+    }
+  }
+  close(FILE);
+  undef $var;
+  if ($count_blocks>1) {$var=$count_blocks;}
+  return $var;
+};
+
+
+
+sub scatter_mblock{
+  my $file = $_[0];
+  my @ftmp_list;
+  my $count_blanks=0;
+  my $fcount=0;
+  open(FIN, "$file") or die "can't open $file: $!";
+  my $lnew="\n";
+  foreach (<FIN>) {
+    my $lold=$lnew;
+    $lnew=$_;
+    if ( $lold =~ /^\s*$/ && !($lnew =~ /^\s*$/)){	# if lold is empty open a new tmp file
+      $fcount++;
+      my $tmpfile = get_temp_filename($file.'.set.'.$fcount);
+      $ftmp_list[++$#ftmp_list] = $tmpfile;
+      open(FOUT, "> $tmpfile");
+    }
+    print FOUT $lnew;
+    if ( $lnew =~ /^\s*$/) {
+      close(FOUT);
+    }				# if lnew is empty close tmp file
+  }
+  close(FIN);
+  return @ftmp_list;
+};
+
+
 #OPEN THE XMGRACE BATCH FILE
 #DEFINE PARTS OF THE COMMAND TO BE EXECUTED IN THE SYSTEM.
+#CREATE AN TEMPORARY XMGRACE BATCH FILE:
+$fbatch= get_temp_filename('xgbatch.'.$login);
 open(FBATCH, ">" . $fbatch);
 print FBATCH "autoscale\n";
 $noautoscale=1;
@@ -1088,6 +1121,8 @@ $cstart='black';
 $cstop='red';
 
 $i = 0;
+
+
 #LOOP OVER ALL OPTIONS:
 foreach $f (@ARGV) {
   if ($f eq "") {
@@ -1360,118 +1395,43 @@ foreach $f (@ARGV) {
   if ($#uss<0) {
     $uss[0]="1:2";
   }
+
+
   for ($j = 0; $j <= $#uss; $j++) {
-
+    undef @foname;
     undef $mblock;
+    $foname[0]=$f;
     $mblock=count_mblock($f);
-
-    #if multiblock file loop over blocks:
     if ($mblock) {
-      my $line;
-      my $fcount=0;
-      my $outf=$tmpdir."output.".int(rand(10000)).".";
-      @foname[$fcount]=$outf.$fcount;
-      open(FOUT, ">".@foname[$fcount]);
-      open(FIN, "$f");
-      foreach $line (<FIN>) {	 # for each line
-	if ( $line =~/^\s*$/ ) { # check if blank line
-	  $fcount++;		 # increment encountered blank lines
-	  @foname[$fcount]=$outf.$fcount;
-	  close(FOUT);
-	  open(FOUT, ">".@foname[$fcount]);
-	}
-	;
-	print FOUT $line;
-      }
-      ;
-      close FOUT;
-      close FIN;
+      @foname = scatter_mblock($f);
+    }
 
-      #foreach $fo (@foname){
-      for ($ii=0;$ii<=$#foname; $ii++) {
-	$fo=@foname[$ii];
-	$lcount++;
-	$symbol=(1+$lcount) % 10 ;		
-	if ($addlegend) {
-	  $fname=basename($f);
-	  if ($dirlegend) {
-	    $fname=dirname($f);
-	    if ($ndir) {
-	      @dirs = File::Spec->splitdir( $fname );
-	      $fname="";
-	      for ($jj=1; $jj<=$ndir; $jj++) {
-		$fname.=$dirs[$jj-1];
-		if ($jj>1 and $jj<$ndir) {
-		  $fname.="/";
-		}
-	      }
-	      ;
-	    }
-	    ;
-	    if ( $ndir >= $#dirs+1) {
-	      $fname=dirname($f);
-	    }
-	    ;
-	  }
-	  ;
-	  print FBATCH "S$lcount legend \"$fname.$ii $uss[$j]\" \n";
-	}
-	;
-	if ($with eq "l") {	    
-	  print FBATCH "S$lcount line type 1\n";
-	  print FBATCH "S$lcount symbol 0\n";
-	}
-	;
-	if ($with eq "p") {
-	  print FBATCH "S$lcount line type 0\n";
-	  print FBATCH "S$lcount symbol $symbol\n";
-	}
-	;
-	if ($with eq "lp") {
-	  print FBATCH "S$lcount line type 1\n";
-	  print FBATCH "S$lcount symbol $symbol\n";
-	}
-	;
-	if ($linewidth) {
-	  print FBATCH "S$lcount linewidth $linewidth\n";
-	}
-	;
-	if ($addshift) {
-	  print FBATCH "S$lcount.y = S$lcount.y + $shift*$lcount\n";
-	}
-	;
-	if ($nobatch) {
-	  $prog .= "\"$fo\"";
-	} else {
-	  $prog .= "-block \"$fo\" -bxy $uss[$j] ";
-	}
-	;
-      }
-      ;
 
-    } else {
+    $set=0;
+    foreach (@foname) {
+      $set++;
+      $fo=$_;
       $lcount++;
-      $symbol=(1+$lcount) % 10 ;
+      $symbol=(1+$lcount) % 10 ;	
 
-      #treat operations on single columns:
       undef $opeX;
       undef $opeY;
+      #treat operations on single columns:
       $columns=$uss[$j];
-      @colop=split(/:/,$columns);	# split each column specification entry in parts separated by :
+      @colop=split(/:/,$columns); # split each column specification entry in parts separated by :
       $colX=$colop[0];	# get the X-spec
       $colY=$colop[1];	# get the Y-spec
       if (!($colX =~ /^\d/ )) { # control if Col-spec if NOT a single digit number, than should be an operation
 	$opeX=$colX;		#store the Col-spec
 	$colX =~ s/[^\d+]//g;   #clean Col-spec from the opration, that is stored in $opeY
 	$opeX =~ s/\$(\d+)/S$lcount.x/g;
-      };
+      }
       if (!($colY =~ /^\d/ )) {
 	$opeY=$colY;	
 	$colY =~ s/[^\d+]//g;
 	$opeY =~ s/\$(\d+)/S$lcount.y/g;
-      };
-      $uss[$j]=$colX.":".$colY;
-
+      }
+      $columns=$colX.":".$colY;
       
       if ($addlegend) {
 	$fname=basename($f);
@@ -1486,73 +1446,70 @@ foreach $f (@ARGV) {
 		$fname.="/";
 	      }
 	    }
-	    ;
 	  }
-	  ;
 	  if ( $ndir >= $#dirs+1) {
 	    $fname=dirname($f);
 	  }
-	  ;
 	}
-	;
-	print FBATCH "S$lcount legend \"$fname $columns\" \n";
-      }
-      ;	
-      if ($with eq "l") {	    
-	print FBATCH "S$lcount line type 1\n";
-	print FBATCH "S$lcount symbol 0\n";
-      }
-      ;
-      if ($with eq "p") {
-	print FBATCH "S$lcount line type 0\n";
-	print FBATCH "S$lcount symbol $symbol\n";
-      }
-      ;
-      if ($with eq "lp") {
-	print FBATCH "S$lcount line type 1\n";
-	print FBATCH "S$lcount symbol $symbol\n";
-      }
-      ;
-      if ($linewidth) {
-	print FBATCH "S$lcount linewidth $linewidth\n";
-      }
-      ;
-      if ($opeX) {
-	print FBATCH "S$lcount.x = $opeX\n";
-      }
-      ;
-      if ($opeY) {
-	if ($addshift) {
-	  print FBATCH "S$lcount.y = $opeY + $shift*$lcount\n";
+	if ($#foname>0) {
+	  print FBATCH "S$lcount legend \"$fname set $set $uss[$j]\" \n";
 	} else {
-	  print FBATCH "S$lcount.y = $opeY\n";
-	}
-      } else {
-	if ($addshift) {
-	  print FBATCH "S$lcount.y = S$lcount.y + $shift*$lcount\n";
+	  print FBATCH "S$lcount legend \"$fname $uss[$j]\" \n";
 	}
       }
-      ;
+      
+      if ($with eq "l") {	    
+    	print FBATCH "S$lcount line type 1\n";
+    	print FBATCH "S$lcount symbol 0\n";
+      }
 
+      if ($with eq "p") {
+    	print FBATCH "S$lcount line type 0\n";
+    	print FBATCH "S$lcount symbol $symbol\n";
+      }
+
+      if ($with eq "lp") {
+    	print FBATCH "S$lcount line type 1\n";
+    	print FBATCH "S$lcount symbol $symbol\n";
+      }
+
+      if ($linewidth) {
+    	print FBATCH "S$lcount linewidth $linewidth\n";
+      }
+
+      if ($opeX) {
+    	print FBATCH "S$lcount.x = $opeX\n";
+      }
+
+      if ($opeY) {
+    	if ($addshift) {
+    	  print FBATCH "S$lcount.y = $opeY + $shift*$lcount\n";
+    	} else {
+    	  print FBATCH "S$lcount.y = $opeY\n";
+    	}
+      } else {
+    	if ($addshift) {
+    	  print FBATCH "S$lcount.y = S$lcount.y + $shift*$lcount\n";
+    	}
+      }
 
       if ($nobatch) {
-	$prog .= "\"$f\"";
+	$prog .= "\"$fo\"";
       } else {
-	$prog .= "-block \"$f\" -bxy $uss[$j] ";
+	$prog .= "-block \"$fo\" -bxy $columns ";
       }
-      ;
+    
     }
-    ;
-
+    
     ($j != $#uss) && ($prog .= " "); # add spaces
     if ($i <= $#ARGV) {
       $prog .= " ";
     }
-    ;
+
   }
-  ;			  
-}
-;			  # end the main loop over arguments and files
+
+};
+
 
 #Build up the cmd line:
 #--------------------------------------------------------------------
@@ -1583,17 +1540,20 @@ close(FBATCH);
 
 
 if ($ishow){
-    print $prog."\n";
-    open(FILE, $fbatch);
-    while (<FILE>){
-	chomp;
-	print "$_\n";
-    };
-    close(FILE)
-};
-
+  print $prog."\n";
+  open(FILE, $fbatch);
+  while (<FILE>){
+    chomp;
+    print "$_\n";
+  }
+  close(FILE)
+}
 system("$prog ");
-foreach $fo (@foname){unlink $fo ;};
-foreach $fo (@gzfiles){unlink $fo;};
-if (not defined $ishow){unlink $fbatch;};
+
+foreach (@tmp_files){
+  unlink $_;
+}
+if (not defined $ishow) {
+  unlink $fbatch;
+}
 exit;
