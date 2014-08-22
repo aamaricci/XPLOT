@@ -11,7 +11,6 @@ use Math::Complex;		# includes support for complex
 
 #SETUP OF SOME GLOBAL VARIABLES USED IN THE REST OF THE SCRIPT
 $home = $ENV{HOME};
-$tmpdir='/tmp';
 $login=getpwuid($<);
 $cfgfile= "$home/.grace/gracerc.user";
 
@@ -1009,7 +1008,7 @@ sub get_temp_filename {
   my $template=$_[0];
   my $fh = File::Temp->new(
 			   TEMPLATE => "$template".'.XXXXX',
-			   DIR => "$tmpdir",
+			   DIR => "/tmp",
 			  );
   $tmp_files[++$#tmp_files]=$fh->filename;
   return $fh->filename;
@@ -1019,7 +1018,7 @@ sub get_temp_filename {
 #DEAL WITH DATA ON STD.INPUT
 $stdin = -t STDIN; 
 if ($stdin ne "1"){
-    my $fdata = $tmpdir . "xgstdin." . $login ; #new File::Temp( UNLINK => 1, DIR=> $home);
+    my $fdata = '/tmp/' . "xgstdin." . $login ; #new File::Temp( UNLINK => 1, DIR=> $home);
     open(G, ">" . $fdata);
     while (<STDIN>) { print G $_; }
     close(G);
