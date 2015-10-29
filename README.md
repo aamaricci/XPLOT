@@ -1,13 +1,19 @@
 ## _PLOT_
 
-### XmGrace from command-line, *i.e.* a perl wrapper of the xmgrace plotting tool. 
+ **XmGrace from command-line, *i.e.* a perl wrapper of the xmgrace plotting tool. **
 
 *(c) Adriano Amaricci 2015*
 
 Version 2.1 [17.Aug.2015]
 
-#### xplot [options] [files/stdin]
-#### Options:   
+
+
+
+**xplot [options] [files/stdin]**
+
+[TOC]
+
+#### Options
 - `-x<min:max>`   [specify x-interval as xmin:xmin, e.g. `-x0:10a]
 - `-y<min:max>`   [specify y-interval as ymin:ymin, e.g. `-y-2:1`]
 - `-lx`           [set the x log-scale]
@@ -27,7 +33,7 @@ Version 2.1 [17.Aug.2015]
 - `-c<C1:C2>`     [use a gradient between color C1 [default black] and color C2 [default red]
 - `-h`            [this help]
 
-####Usage:
+####Usage
 [... | ] **xplot** *[options]* ==[files/stdin]==
 
  `$ xplot data`
