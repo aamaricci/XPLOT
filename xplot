@@ -1300,7 +1300,6 @@ foreach $f (@ARGV) {
       $fo=$_;
       $lcount++;
       $symbol=(1+$lcount) % 10 ;	
-
       undef $opeX;
       undef $opeY;
       #treat operations on single columns:
@@ -1367,6 +1366,7 @@ foreach $f (@ARGV) {
       if ($usegrad) {
 	  my $Ncolor=(2+$lcount);
 	  print FBATCH "S$lcount line color $Ncolor\n";
+	  print FBATCH "S$lcount symbol color $Ncolor\n";
       }
 
       if ($opeX) {
@@ -1550,7 +1550,7 @@ sub Color_Gradient{ # FOR TWO GIVEN COLORS NAME RETURN THE STRING SEQUENCE FOR X
     my $pexec="-pexec ";
     my $str="";
     my $stride=2;
-    if ($name1 eq 'black'){$stride=1;};
+    #if ($name1 eq 'black'){$stride=1;};
     my @color1=Lookup_color($name1);
     my @color2=Lookup_color($name2);
     my @diff = map { ($color2[$_] - $color1[$_])/($num) } 0..$#color1;
