@@ -1010,7 +1010,7 @@ $lcount=-1;
 $numsets=0;
 $cstart='black';
 $cstop='red';
-
+$stype="xy";
 $i = 0;
 
 
@@ -1039,6 +1039,7 @@ foreach $f (@ARGV) {
     print "           -uX:Yn/F(Yn)  x,y  nth-columns -u1:3; -u1:2,1:3; -uall; -uone/-u1; -u1:\'cos(\$2)\'\n";
     print "           -m[w:h]       set fixed window format (default free)[wdith:height]\n";
     print "           -show         print cmd line on std.out\n";
+    print "           -st           set the graph type to: xy,xydx,xydy,xydxdy [default xy]\n";
     print "           -s<file>      save output to file.agr\n";
     print "           -t<string>    set title\n";
     print "           -xt<string>   set x-label\n";
@@ -1056,7 +1057,7 @@ foreach $f (@ARGV) {
     print "           seq -f%1.4f 0 0.01 6.28 |plot -u1:'cos(\$1)' -show\n";
     exit;
   }
-  
+
 
 
   #--------------------------------------------------------------------
@@ -1065,213 +1066,221 @@ foreach $f (@ARGV) {
     next;
   }
   
-
+  if (substr($f, 0, 3) eq "-st") { # show cmd line
+      $stype=substr($f,3);
+      if($stype eq "xy"){next;}
+      if($stype eq "xydx"){next;}
+      if($stype eq "xydy"){next;}
+      if($stype eq "xydxdy"){next;}
+      print "stype != xy,xydx,xydy,xydxdy \n";
+      exit;
+  }
 
   #--------------------------------------------------------------------
   if (substr($f,0,2) eq "-m") { # standard format
-    $prog1 = " ";
-    $range = substr($f, 2);
-    @parts = split(/:/,$range);
-    if (@parts) {
-      $w=@parts[0];
-      $h=@parts[1];
-      $prog1 = "-fixed $w $h ";
-    }
-    next;
+      $prog1 = " ";
+      $range = substr($f, 2);
+      @parts = split(/:/,$range);
+      if (@parts) {
+	  $w=@parts[0];
+	  $h=@parts[1];
+	  $prog1 = "-fixed $w $h ";
+      }
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-s") { # -s save to agr file
-    $fullname = substr($f, 2);
-    ($file,$dir,$ext) = fileparse($fullname, qr/\.[^.]*/);
-    $progN .="-saveall $dir$file.agr ";
-    next;
+      $fullname = substr($f, 2);
+      ($file,$dir,$ext) = fileparse($fullname, qr/\.[^.]*/);
+      $progN .="-saveall $dir$file.agr ";
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-k") { #add a stride to data with increasing order
-    $addshift=1;
-    $shift=substr($f,2);
-    next;
+      $addshift=1;
+      $shift=substr($f,2);
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-lx") { # -lt set log scale on x-axis
-    print FBATCH "xaxes scale logarithmic\n";
-    next;
+      print FBATCH "xaxes scale logarithmic\n";
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-ly") { # -lt set log scale on y-axis
-    print FBATCH "yaxes scale logarithmic\n";
-    next;
+      print FBATCH "yaxes scale logarithmic\n";
+      next;
   }
-  
+
 
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-t") { # -t add title
-    $title=substr($f,2);
-    print FBATCH "subtitle \"$title\"\n";
-    print FBATCH "subtitle color 15\n";
-    next;
+      $title=substr($f,2);
+      print FBATCH "subtitle \"$title\"\n";
+      print FBATCH "subtitle color 15\n";
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-xt") { # -xt set the x-axes labels
-    $label=substr($f,3);
-    print FBATCH "xaxis label \"$label\"\n";
-    next;
+      $label=substr($f,3);
+      print FBATCH "xaxis label \"$label\"\n";
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-yt") { # -yt set the y-axes labels
-    $label=substr($f,3);
-    print FBATCH "yaxis label \"$label\"\n";
-    next;
+      $label=substr($f,3);
+      print FBATCH "yaxis label \"$label\"\n";
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-lw") { # this sets linewidth
-    $linewidth = substr($f, 3);
-    next; 
+      $linewidth = substr($f, 3);
+      next; 
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-l") { # add legend to the plot
-    $addlegend=1;
-    $dirlegend=0;
-    next;
+      $addlegend=1;
+      $dirlegend=0;
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-d") { # use directory rather filenames in legend
-    $addlegend=1;
-    $dirlegend=1;
-    $ndir = substr($f, 2);
-    next;
+      $addlegend=1;
+      $dirlegend=1;
+      $ndir = substr($f, 2);
+      next;
   }
-  
+
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-w") { # this sets plotting style, for example
-    $with = substr($f, 2); # -wl plots with lines, -wlp with lines and points
-    next;   # -wsteps with steps. Here any gnuplot command can be used
+      $with = substr($f, 2); # -wl plots with lines, -wlp with lines and points
+      next; # -wsteps with steps. Here any gnuplot command can be used
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-x") { # x-range can be set here
-    $xr = substr($f, 2);
-    @parts = split(/:/,$xr);	    	
-    $xmin=@parts[0];
-    $xmax=@parts[1];
-    print FBATCH "world xmin $xmin\n";
-    print FBATCH "world xmax $xmax\n";
-    $noautoscale=0;
-    next;
+      $xr = substr($f, 2);
+      @parts = split(/:/,$xr);	    	
+      $xmin=@parts[0];
+      $xmax=@parts[1];
+      print FBATCH "world xmin $xmin\n";
+      print FBATCH "world xmax $xmax\n";
+      $noautoscale=0;
+      next;
   }
-  
+
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-y") { # y-range
-    $yr = substr($f, 2);
-    $autoscaley="";
-    @parts = split(/:/,$yr);	    	
-    $ymin=@parts[0];
-    $ymax=@parts[1];
-    print FBATCH "world ymin $ymin\n";
-    print FBATCH "world ymax $ymax\n";
-    $noautoscale=0;
-    next;
+      $yr = substr($f, 2);
+      $autoscaley="";
+      @parts = split(/:/,$yr);	    	
+      $ymin=@parts[0];
+      $ymax=@parts[1];
+      print FBATCH "world ymin $ymin\n";
+      print FBATCH "world ymax $ymax\n";
+      $noautoscale=0;
+      next;
   }
-  
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-c") { # x-range can be set here
-    $xr = substr($f, 2);
-    if ($xr eq 'list') {
-      test_x11_colors;
-      exit;
-    }
+      $xr = substr($f, 2);
+      if ($xr eq 'list') {
+	  test_x11_colors;
+	  exit;
+      }
 
-    @colors = split(/:/,$xr);
-    if ($#colors >0) {
-      $cstart=@colors[0];
-      $cstop=@colors[1];
-    } else {
-      print "using default gradient colors: C1=black ; C2=red\n";
-    }
-    $usegrad=1;
-    next;
+      @colors = split(/:/,$xr);
+      if ($#colors >0) {
+	  $cstart=@colors[0];
+	  $cstop=@colors[1];
+      } else {
+	  print "using default gradient colors: C1=black ; C2=red\n";
+      }
+      $usegrad=1;
+      next;
   }
-    
+
 
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-u") { # this sets which columns will be plotted 
-    $using = substr($f, 2);	  # example of usage -u1:2,1:3,1:5
+      $using = substr($f, 2);	  # example of usage -u1:2,1:3,1:5
       if ($using eq "all") { # -uall means -u1:2,....1:n where n is number of all columns
-      $all = "1";
-    } elsif ($using eq "one") {
-      $nobatch=1;
-      $#uss=-1;
-    } elsif ($using eq "1") {
-      $nobatch=1;
-      $#uss=-1;
-    } else {
-      $all = "0";
-      $_ = $using;
-      $#uss=-1;
-      @parts = split(/,/,$using);
-      foreach (@parts){
-	$uss[++$#uss]=$_;
+	  $all = "1";
+      } elsif ($using eq "one") {
+	  $nobatch=1;
+	  $#uss=-1;
+      } elsif ($using eq "1") {
+	  $nobatch=1;
+	  $#uss=-1;
+      } else {
+	  $all = "0";
+	  $_ = $using;
+	  $#uss=-1;
+	  @parts = split(/,/,$using);
+	  foreach (@parts){
+	      $uss[++$#uss]=$_;
+	  }
+	  # while (/([0-9]+(:[0-9]+)+)/g) {
+	  # 	$uss[++$#uss] = "$1";
+	  # }
       }
-      # while (/([0-9]+(:[0-9]+)+)/g) {
-      # 	$uss[++$#uss] = "$1";
-      # }
-    }
-    next;
+      next;
   } 
 
   #--------------------------------------------------------------------
   # in case  all is 1, all columns in a file are plotted, equivalent to -u1:2,1:3,...,1:n
   if ($all eq "1") { 
-    open (G, "<$f");
-    while (<G>) {
-      if (/^[ |\t]*\#/) {
-	next;
+      open (G, "<$f");
+      while (<G>) {
+	  if (/^[ |\t]*\#/) {
+	      next;
+	  }
+	  @temp = split(' ', $_);
+	  $nall = $#temp + 1;
+	  last;
       }
-      @temp = split(' ', $_);
-      $nall = $#temp + 1;
-      last;
-    }
-    close (G);
-    $#uss=-1;
-    for ($j=2; $j<=$nall; $j++) {
-      $uss[++$#uss] = "1:$j"; 
-    }
+      close (G);
+      $#uss=-1;
+      for ($j=2; $j<=$nall; $j++) {
+	  $uss[++$#uss] = "1:$j"; 
+      }
   }
 
 
@@ -1281,68 +1290,79 @@ foreach $f (@ARGV) {
 #--------------------------------------------------------------------
 
   if ($#uss<0) {
-    $uss[0]="1:2";
+      if($stype eq "xy"){$uss[0]="1:2";}
+      if($stype eq "xydx"){$uss[0]="1:2:3";}
+      if($stype eq "xydy"){$uss[0]="1:2:3";}
+      if($stype eq "xydxdy"){$uss[0]="1:2:3:4";}
   }
 
 
   for ($j = 0; $j <= $#uss; $j++) {
-    undef @foname;
-    undef $mblock;
-    $foname[0]=$f;
-    $mblock=count_mblock($f);
-    if ($mblock) {
-      @foname = scatter_mblock($f);
-    }
+      undef @foname;
+      undef $mblock;
+      $foname[0]=$f;
+      $mblock=count_mblock($f);
+      if ($mblock) {
+	  @foname = scatter_mblock($f);
+      }
 
-    $set=0;
-    foreach (@foname) {
-      $set++;
-      $fo=$_;
-      $lcount++;
-      $symbol=(1+$lcount) % 10 ;	
-      undef $opeX;
-      undef $opeY;
-      #treat operations on single columns:
-      $columns=$uss[$j];
-      @colop=split(/:/,$columns); # split each column specification entry in parts separated by :
-      $colX=$colop[0];	# get the X-spec
-      $colY=$colop[1];	# get the Y-spec
-      if (!($colX =~ /^\d/ )) { # control if Col-spec if NOT a single digit number, than should be an operation
-	$opeX=$colX;		#store the Col-spec
-	$colX =~ s/[^\d+]//g;   #clean Col-spec from the opration, that is stored in $opeY
-	$opeX =~ s/\$(\d+)/S$lcount.x/g;
-      }
-      if (!($colY =~ /^\d/ )) {
-	$opeY=$colY;	
-	$colY =~ s/[^\d+]//g;
-	$opeY =~ s/\$(\d+)/S$lcount.y/g;
-      }
-      $columns=$colX.":".$colY;
-      
-      if ($addlegend) {
-	$fname=basename($f);
-	if ($dirlegend) {
-	  $fname=dirname($f);
-	  if ($ndir) {
-	    @dirs = File::Spec->splitdir( $fname );
-	    $fname="";
-	    for ($jj=1; $jj<=$ndir; $jj++) {
-	      $fname.=$dirs[$jj-1];
-	      if ($jj>1 and $jj<$ndir) {
-		$fname.="/";
+      $set=0;
+      foreach (@foname) {
+	  $set++;
+	  $fo=$_;
+	  $lcount++;
+	  $symbol=(1+$lcount) % 10 ;	
+	  undef $opeX;
+	  undef $opeY;
+	  #treat operations on single columns:
+	  $columns=$uss[$j];
+	  @colop=split(/:/,$columns); # split each column specification entry in parts separated by :
+	  if($stype eq "xy"){ ($#colop = 1) or die("2 columns required for stype=xy, e.g. 1:2\n");}
+	  if($stype eq "xydx"){ ($#colop = 2) or die("3 columns required for stype=xydx, e.g. 1:2:3\n");}
+	  if($stype eq "xydy"){ ($#colop = 2) or die("3 columns required for stype=xydy, e.g. 1:2:3\n");}
+	  if($stype eq "xydxdy"){ ($#colop = 3) or die("4 columns required for stype=xydxdy, e.g. 1:2:3:4\n");}
+	  $colX=$colop[0];	# get the X-spec
+	  $colY=$colop[1];	# get the Y-spec
+	  if (!($colX =~ /^\d/ )) { # control if Col-spec if NOT a single digit number, than should be an operation
+	      $opeX=$colX;	    #store the Col-spec
+	      $colX =~ s/[^\d+]//g; #clean Col-spec from the opration, that is stored in $opeY
+	      $opeX =~ s/\$(\d+)/S$lcount.x/g;
+	  }
+	  if (!($colY =~ /^\d/ )) {
+	      $opeY=$colY;	
+	      $colY =~ s/[^\d+]//g;
+	      $opeY =~ s/\$(\d+)/S$lcount.y/g;
+	  }
+	  $columns=$colX.":".$colY;
+	  if( $#colop > 1){
+	      for ($icolop = 2; $icolop <= $#colop; $icolop++) {
+		  $columns .= ':'.$colop[$icolop];
+	      };
+	  }
+	  if ($addlegend) {
+	      $fname=basename($f);
+	      if ($dirlegend) {
+		  $fname=dirname($f);
+		  if ($ndir) {
+		      @dirs = File::Spec->splitdir( $fname );
+		      $fname="";
+		      for ($jj=1; $jj<=$ndir; $jj++) {
+			  $fname.=$dirs[$jj-1];
+			  if ($jj>1 and $jj<$ndir) {
+			      $fname.="/";
+			  }
+		      }
+		  }
+		  if ( $ndir >= $#dirs+1) {
+		      $fname=dirname($f);
+		  }
 	      }
-	    }
+	      if ($#foname>0) {
+		  print FBATCH "S$lcount legend \"$fname set $set $uss[$j]\" \n";
+	      } else {
+		  print FBATCH "S$lcount legend \"$fname $uss[$j]\" \n";
+	      }
 	  }
-	  if ( $ndir >= $#dirs+1) {
-	    $fname=dirname($f);
-	  }
-	}
-	if ($#foname>0) {
-	  print FBATCH "S$lcount legend \"$fname set $set $uss[$j]\" \n";
-	} else {
-	  print FBATCH "S$lcount legend \"$fname $uss[$j]\" \n";
-	}
-      }
       
       if ($with eq "l") {	    
 	  print FBATCH "S$lcount line type 1\n";
@@ -1388,15 +1408,15 @@ foreach $f (@ARGV) {
       if ($nobatch) {
 	  $prog .= "\"$fo\"";
       } else {
-	  $prog .= "-block \"$fo\" -bxy $columns ";
+	  $prog .= "-block \"$fo\" -settype $stype -bxy $columns ";
       }
 
-    }
+      }
 
-    ($j != $#uss) && ($prog .= " "); # add spaces
-    if ($i <= $#ARGV) {
-	$prog .= " ";
-    }
+      ($j != $#uss) && ($prog .= " "); # add spaces
+      if ($i <= $#ARGV) {
+	  $prog .= " ";
+      }
 
   }
 
