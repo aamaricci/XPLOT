@@ -1162,6 +1162,12 @@ foreach $f (@ARGV) {
   }
 
 
+    #--------------------------------------------------------------------
+  if (substr($f, 0, 3) eq "-ps") { # this sets linewidth
+      $pointsize = substr($f, 3);
+      next; 
+  }
+
 
   #--------------------------------------------------------------------
   if (substr($f, 0, 3) eq "-l") { # add legend to the plot
@@ -1323,24 +1329,26 @@ foreach $f (@ARGV) {
 	  if($stype eq "xydxdy"){ ($#colop = 3) or die("4 columns required for stype=xydxdy, e.g. 1:2:3:4\n");}
 	  $colX=$colop[0];	# get the X-spec
 	  $colY=$colop[1];	# get the Y-spec
-	  if (!($colX =~ /^\d/ )) { # control if Col-spec if NOT a single digit number, than should be an operation
-	      $opeX=$colX;	    #store the Col-spec
-	      $colX =~ s/[^\d+]//g; #clean Col-spec from the opration, that is stored in $opeY
-	      $opeX =~ s/\$(\d+)/S$lcount.x/g;
+	  if (($colX =~ /\$(\d+)/)) { # control if Col-spec if NOT a single digit number, then should be an operation
+	    $opeX=$colX;	    #store the Col-spec
+	    $colX =~ s/.*(\$\d+).*$/\1/g;
+	    $colX =~ s/[^\d+]//g; #clean Col-spec from the opration, that is stored in $opeX
+	    $opeX =~ s/\$(\d+)/S$lcount.x/g;
 	  }
-	  if (!($colY =~ /^\d/ )) {
-	      $opeY=$colY;	
-	      $colY =~ s/[^\d+]//g;
-	      $opeY =~ s/\$(\d+)/S$lcount.y/g;
+	  if (($colY =~ /\$(\d+)/ )) {
+	    $opeY=$colY;
+	    $colY =~ s/.*(\$\d+).*$/\1/g;
+	    $colY =~ s/[^\d+]//g;
+	    $opeY =~ s/\$(\d+)/S$lcount.y/g;
 	  }
 	  $columns=$colX.":".$colY;
 	  if( $#colop > 1){
-	      for ($icolop = 2; $icolop <= $#colop; $icolop++) {
-		  $columns .= ':'.$colop[$icolop];
-	      };
+	    for ($icolop = 2; $icolop <= $#colop; $icolop++) {
+	      $columns .= ':'.$colop[$icolop];
+	    };
 	  }
 	  if ($addlegend) {
-	      $fname=basename($f);
+	    $fname=basename($f);
 	      if ($dirlegend) {
 		  $fname=dirname($f);
 		  if ($ndir) {
@@ -1379,6 +1387,10 @@ foreach $f (@ARGV) {
 	  print FBATCH "S$lcount symbol $symbol\n";
       }
 
+      if ($pointsize) {
+	  print FBATCH "S$lcount symbol size $pointsize\n";
+	}
+	  
       if ($linewidth) {
 	  print FBATCH "S$lcount linewidth $linewidth\n";
       }
@@ -1591,19 +1603,20 @@ sub Color_Gradient{ # FOR TWO GIVEN COLORS NAME RETURN THE STRING SEQUENCE FOR X
 __DATA__
 # Grace project file
 #
-    version 50122
+    version 50123
 #page size 842, 594
     page size 1024, 768
     page scroll 5%
     page inout 5%
     link page off
-    map font 0 to "Helvetica", "Helvetica"
-    map font 1 to "Times-Roman", "Times-Roman"
-    map font 2 to "Times-Italic", "Times-Italic"
-    map font 3 to "Times-Bold", "Times-Bold"
-    map font 4 to "Times-BoldItalic", "Times-BoldItalic"
-    map font 5 to "Symbol", "Symbol"
-    map font 6 to "ZapfDingbats", "ZapfDingbats"
+#FONTS:
+    map font 0 to "Times-Roman", "Times-Roman"
+    map font 1 to "Times-Italic", "Times-Italic"
+    map font 2 to "Times-Bold", "Times-Bold"
+    map font 3 to "Times-BoldItalic", "Times-BoldItalic"
+    map font 4 to "Symbol", "Symbol"
+    map font 5 to "ZapfDingbats", "ZapfDingbats"
+    map font 6 to "Helvetica", "Helvetica"
 #COLORS:
     map color 0 to (255, 255, 255), "white"
 #
