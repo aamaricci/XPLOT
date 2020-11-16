@@ -189,6 +189,7 @@ use Math::Complex;		# includes support for complex
 		   'ghost white'	   => [248,248,255],
 		   'GhostWhite'	           => [248,248,255],
 		   'white smoke'	   => [245,245,245],
+		   'crimson'	           => [220, 20, 60],
 		   'WhiteSmoke'  	   => [245,245,245],
 		   'gainsboro'		   => [220,220,220],
 		   'floral white'	   => [255,250,240],
@@ -1225,14 +1226,32 @@ foreach $f (@ARGV) {
 
       
       @palette = split(/:/,$xr);
-
+      if ( $palette[0] eq ""){
+	$palette[0] = "default";
+	print STDERR "Using default palette\n";
+      };
+      
       if ( $palette[0] eq "rainbow"){
 	@palette = ();
 	@palette = ("red","orange","yellow","green","cyan","blue","purple");
       }
-      # if ($palette eq 0){
-      # 	print "using default gradient colors: C1=black ; C2=red\n";
-      # }
+      
+      if ( $palette[0] eq "jamaica"){
+	@palette = ();
+	@palette = ("dark green","yellow","red");
+      }
+
+      if ( $palette[0] eq "default"){
+	@palette = ();
+	@palette = ("midnightblue","firebrick","gold");
+      }
+
+      if ( $palette[0] eq "solar"){
+	@palette = ();
+	@palette = ("black","crimson","gold");
+      }
+      
+
       $usegrad=1;
       next;
   }
@@ -1576,6 +1595,11 @@ sub Lookup_color{ # LOOK UP FOR A GIVEN COLOR IN THE x11 DICTIONARY AND RETURN R
 sub MultiColor_Gradient{ # FOR TWO GIVEN COLORS NAME RETURN THE STRING SEQUENCE FOR XMGRACE CMD USING -pexec
   my @palette = @{$_[0]};
   my $num = $_[1];
+  if ($#palette > $num){
+    print STDERR "Too many colors: fallback to red:blue";
+    @palette = ();
+    @palette = ("red","blue");    
+  };
   my $pexec="-pexec ";
   my $str="";
   my $stride=2;
@@ -1587,7 +1611,7 @@ sub MultiColor_Gradient{ # FOR TWO GIVEN COLORS NAME RETURN THE STRING SEQUENCE 
     my @diff = map { ($color2[$_] - $color1[$_])/($num) } 0..$#color1;
     for ($i=0;$i<=$num; $i++){
       my @color = map {$color1[$_] + $diff[$_]*$i} 0..$#color1;
-      @color = map {int($color[$_]) } 0..$#color;
+     @color = map {int($color[$_]) } 0..$#color;
       $str1="map color ".($i+$stride)." to ($color[0],$color[1],$color[2]), \"grad".($i+($stride-1))."\"";
       $str.=$pexec."'$str1' "
     };
@@ -1598,7 +1622,7 @@ sub MultiColor_Gradient{ # FOR TWO GIVEN COLORS NAME RETURN THE STRING SEQUENCE 
       my $npoint=@nstep[$j];
       my @color1=Lookup_color($palette[$j]);
       my @color2=Lookup_color($palette[$j+1]);
-      my @diff = map { ($color2[$_] - $color1[$_])/($npoint) } 0..$#color1;     
+      my @diff = map { ($color2[$_] - $color1[$_])/($npoint) } 0..$#color1;
       for ($i=0;$i<=$npoint; $i++) {
     	my @color = map {$color1[$_] + $diff[$_]*$i} 0..$#color1;
     	@color = map {int($color[$_]) } 0..$#color;
