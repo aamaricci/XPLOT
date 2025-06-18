@@ -928,7 +928,16 @@ use Math::Complex;		# includes support for complex
 		  'dark red'		   => [139,0,0],
 		  'DarkRed'		   => [139,0,0],
 		  'light green'	   => [144,238,144],
-		  'LightGreen'	   => [144,238,144],
+		   'LightGreen'	   => [144,238,144],
+		   'Pcolor1' => [53, 42, 135],
+		   'Pcolor2' => [3, 99, 225],
+		   'Pcolor3' => [20, 133, 212],
+		   'Pcolor4' => [6, 167, 198],
+		   'Pcolor5' => [56, 185, 158],
+		   'Pcolor6' => [146, 191, 115],
+		   'Pcolor7' => [217, 186, 86],
+		   'Pcolor8' => [252, 206, 46],
+		   'Pcolor9' => [249, 251, 14],
 		  );
 
 
@@ -1040,8 +1049,10 @@ foreach $f (@ARGV) {
     print "           -l            legend on\n";
     print "           -d            legend on using directories\n";
     print "           -k            y-axis stride for data sets\n";
-    print "           -w<l,p,lp>    set line type:line,points\n";
+    print "           -w<l,p,lp:N>  set line type:line,points [of type N]\n";
     print "           -c<C1:C2>     use a gradient between color C1 [black ]and color C2 [red];\n";
+    print "           -c<scheme>    use a gradient scheme:default,solar,jamaica,rainbow or C1:C2:..:Cn;\n";
+
     print "           -h            this help\n";
     print "\n";
     print "Examples:  plot data\n";
@@ -1181,9 +1192,14 @@ foreach $f (@ARGV) {
 
 
   #--------------------------------------------------------------------
-  if (substr($f, 0, 2) eq "-w") { # this sets plotting style, for example
-      $with = substr($f, 2); # -wl plots with lines, -wlp with lines and points
-      next; # -wsteps with steps. Here any gnuplot command can be used
+  if (substr($f, 0, 2) eq "-w") { # this sets plotting style lines and points
+    $waux = substr($f, 2);
+    @parts = split(/:/,$waux);
+    $with=@parts[0];    
+    if(defined(@parts[1])){
+      $with_symbol = @parts[1] % 10;
+    }
+    next;
   }
 
 
@@ -1191,7 +1207,7 @@ foreach $f (@ARGV) {
   #--------------------------------------------------------------------
   if (substr($f, 0, 2) eq "-x") { # x-range can be set here
       $xr = substr($f, 2);
-      @parts = split(/:/,$xr);	    	
+      @parts = split(/:/,$xr);	
       $xmin=@parts[0];
       $xmax=@parts[1];
       print FBATCH "world xmin $xmin\n";
@@ -1251,7 +1267,11 @@ foreach $f (@ARGV) {
 	@palette = ("black","crimson","gold");
       }
       
-
+      if ( $palette[0] eq "matplotlib"){
+	@palette = ();
+	@palette = ("Pcolor1","Pcolor2","Pcolor3","Pcolor4","Pcolor5","Pcolor6","Pcolor7","Pcolor8","Pcolor9");
+      }
+      
       $usegrad=1;
       next;
   }
@@ -1347,13 +1367,13 @@ foreach $f (@ARGV) {
 	    $opeX=$colX;	    #store the Col-spec
 	    $colX =~ s/.*(\$\d+).*$/\1/g;
 	    $colX =~ s/[^\d+]//g; #clean Col-spec from the opration, that is stored in $opeX
-	    $opeX =~ s/\$(\d+)/S$lcount.x/g;
+	    $opeX =~ s/\$(\d+)/s$lcount.x/g;
 	  }
 	  if (($colY =~ /\$(\d+)/ )) {
 	    $opeY=$colY;
 	    $colY =~ s/.*(\$\d+).*$/\1/g;
 	    $colY =~ s/[^\d+]//g;
-	    $opeY =~ s/\$(\d+)/S$lcount.y/g;
+	    $opeY =~ s/\$(\d+)/s$lcount.y/g;
 	  }
 	  $columns=$colX.":".$colY;
 	  if( $#colop > 1){
@@ -1361,7 +1381,69 @@ foreach $f (@ARGV) {
 	      $columns .= ':'.$colop[$icolop];
 	    };
 	  }
-	  if ($addlegend) {
+	 
+	  
+	  if ($with eq "l") {	    
+	    print FBATCH "s$lcount line type 1\n";
+	    print FBATCH "s$lcount symbol 0\n";
+	  }
+	  
+	  if ($with eq "p") {
+	    print FBATCH "s$lcount line type 0\n";
+	    if (defined($with_symbol)) {
+	      print FBATCH "s$lcount symbol $with_symbol\n";
+	    }else{
+	      print FBATCH "s$lcount symbol $symbol\n";
+	    }
+	  }
+	  
+	  
+	  if ($with eq "lp") {
+	    print FBATCH "s$lcount line type 1\n";
+	    if (defined($with_symbol)) {
+	      print FBATCH "s$lcount symbol $with_symbol\n";
+	    }else{
+	      print FBATCH "s$lcount symbol $symbol\n";
+	    }
+	  }
+	  
+	  if ($pointsize) {
+	    print FBATCH "s$lcount symbol size $pointsize\n";
+	  }
+	  
+	  if ($linewidth) {
+	    print FBATCH "s$lcount linewidth $linewidth\n";
+	  }
+	  
+	  if ($usegrad) {
+	    my $Ncolor=(2+$lcount);
+	    print FBATCH "s$lcount line color $Ncolor\n";
+	    print FBATCH "s$lcount symbol color $Ncolor\n";
+	  }
+	  
+	  if ($opeX) {
+	    print FBATCH "s$lcount.x = $opeX\n";
+	  }
+	  
+	  if ($opeY) {
+	    if ($addshift) {
+	      print FBATCH "s$lcount.y = $opeY + $shift*$lcount\n";
+	    } else {
+	      print FBATCH "s$lcount.y = $opeY\n";
+	    }
+	  } else {
+	    if ($addshift) {
+	      print FBATCH "s$lcount.y = s$lcount.y + $shift*$lcount\n";
+	    }
+	  }
+	  
+	  if ($nobatch) {
+	    $prog .= "\"$fo\"";
+	  } else {
+	    $prog .= "-block \"$fo\" -settype $stype -bxy $columns ";
+	  }
+
+	   if ($addlegend) {
 	    $fname=basename($f);
 	      if ($dirlegend) {
 		  $fname=dirname($f);
@@ -1380,72 +1462,19 @@ foreach $f (@ARGV) {
 		  }
 	      }
 	      if ($#foname>0) {
-		  print FBATCH "S$lcount legend \"$fname set $set $uss[$j]\" \n";
+		print FBATCH "s$lcount legend \"$fname set $set $uss[$j]\" \n";
 	      } else {
-		  print FBATCH "S$lcount legend \"$fname $uss[$j]\" \n";
+		print FBATCH "s$lcount legend \"$fname $uss[$j]\" \n";
 	      }
 	  }
-      
-      if ($with eq "l") {	    
-	  print FBATCH "S$lcount line type 1\n";
-	  print FBATCH "S$lcount symbol 0\n";
-      }
-
-      if ($with eq "p") {
-	  print FBATCH "S$lcount line type 0\n";
-	  print FBATCH "S$lcount symbol $symbol\n";
-      }
-
-      if ($with eq "lp") {
-	  print FBATCH "S$lcount line type 1\n";
-	  print FBATCH "S$lcount symbol $symbol\n";
-      }
-
-      if ($pointsize) {
-	  print FBATCH "S$lcount symbol size $pointsize\n";
-	}
 	  
-      if ($linewidth) {
-	  print FBATCH "S$lcount linewidth $linewidth\n";
-      }
-
-      if ($usegrad) {
-	  my $Ncolor=(2+$lcount);
-	  print FBATCH "S$lcount line color $Ncolor\n";
-	  print FBATCH "S$lcount symbol color $Ncolor\n";
-      }
-
-      if ($opeX) {
-	  print FBATCH "S$lcount.x = $opeX\n";
-      }
-
-      if ($opeY) {
-	  if ($addshift) {
-	      print FBATCH "S$lcount.y = $opeY + $shift*$lcount\n";
-	  } else {
-	      print FBATCH "S$lcount.y = $opeY\n";
-	  }
-      } else {
-	  if ($addshift) {
-	      print FBATCH "S$lcount.y = S$lcount.y + $shift*$lcount\n";
-	  }
-      }
-
-      if ($nobatch) {
-	  $prog .= "\"$fo\"";
-      } else {
-	  $prog .= "-block \"$fo\" -settype $stype -bxy $columns ";
-      }
-
-      }
-
+	}
+      
       ($j != $#uss) && ($prog .= " "); # add spaces
       if ($i <= $#ARGV) {
-	  $prog .= " ";
-      }
-
-  }
-
+	$prog .= " ";
+      }      
+    }  
 }
 
 
@@ -1647,7 +1676,7 @@ sub MultiColor_Gradient{ # FOR TWO GIVEN COLORS NAME RETURN THE STRING SEQUENCE 
 __DATA__
 # Grace project file
 #
-    version 50123
+    version 50122
 #page size 842, 594
     page size 1024, 768
     page scroll 5%
