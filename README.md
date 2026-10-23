@@ -129,7 +129,79 @@ is applied. `image` reads a rectangular matrix, with origin at the bottom and
 `--extent` specifying its outer boundaries. `scatter-color` accepts scattered
 points; `scatter3d` is also available. `--cmap`, `--clim MIN:MAX`, `--clog` and
 `--cb-label` control colors; logarithmic colors require positive values.
-Use `--z MIN:MAX`, `--zt TEXT`, `--lz` for the 3D Z axis.
+Use `-zMIN:MAX` (or `--z MIN:MAX`), `--zt TEXT`, `-lz` (or `--lz`) for the 3D Z axis.
+The short colorbar option is `-cbMIN:MAX`, equivalent to `--clim MIN:MAX`;
+use `-cbtTEXT` (or `--cb-label TEXT`) for its label, e.g. `'-cbt$A(\omega)$'`.
+`-cSCHEME` continues to select the curve palette.
+Use `-lcb` (or `--clog`) for a logarithmic colorbar: the scale acts on intensity
+values, while the palette is unchanged and ticks retain original units
+(e.g. 0.001, 0.01, 0.1). `-lz` gives the 3D Z axis the same logarithmic scaling.
+Both require positive values and positive limits; neither replaces data with
+logarithms or displays log10 exponents.
+
+```sh
+./mplot --type intensity -x-4:4 -y0:2 -cb0:0.5 spectral.dat
+./mplot --type surface -z0:0.5 surface.dat
+./mplot --type intensity -lcb -cb0.001:1 '-cbt$A(\omega)$' spectral.dat
+./mplot --type line3d -lz -z0.001:1 trajectory.dat
+```
+
+### Intensity maps from a parameter sweep
+
+Use `--stack-values FILE` to assemble one XY curve per input file into an
+intensity map. The parameter file must contain **one numeric column**, with
+exactly one distinct, finite value per input file, paired in command-line order:
+
+```text
+# temperatures.dat
+0.10
+0.25
+0.50
+```
+
+```sh
+# One curve per row: x = curve coordinate, y = temperature, color = curve value.
+./mplot --stack-values temperatures.dat -u1:2 --cmap magma \
+    -xtfrequency -yttemperature --cb-label intensity \
+    T01/spectrum.dat T02/spectrum.dat T03/spectrum.dat
+
+# One curve per column: x = temperature, y = curve coordinate.
+./mplot --stack-values temperatures.dat --stack-axis x \
+    T01/spectrum.dat T02/spectrum.dat T03/spectrum.dat
+
+# Formulas and standalone projects work as usual.
+./mplot --stack-values temperatures.dat '-u$1/pi:$2+$3' \
+    -ssweep.py T01/spectrum.dat T02/spectrum.dat T03/spectrum.dat
+```
+
+This option selects `--type intensity` automatically. Each file must contain one
+numeric data block and one selected XY curve; `-k`, `-uall`, error bars and
+multiple selections are rejected. At least two files and two samples per curve
+are required. Curve coordinates may be unordered, but must be unique and share
+the same grid (round-off tolerance: `rtol=1e-10`, `atol=1e-12`, using the first
+file's coordinates). By default no interpolation is performed. Parameter values may be
+nonuniform or unordered: the axis is sorted while preserving file/value pairs.
+Shell globs determine file order, so check their expansion against the parameter
+file. `--link-data` rereads both curve files and parameter values on every run;
+the default saved script embeds the completed map.
+
+For a smoother parameter sweep, add `--interpolate 4`; `-cbtTEXT` labels the
+colorbar (quote text containing spaces or mathtext):
+
+```sh
+./mplot --stack-values temperatures.dat --interpolate 4 -cb0:1 '-cbt$A(\omega,T)$' \
+    T01/spectrum.dat T02/spectrum.dat T03/spectrum.dat
+```
+
+This subdivides each interval between adjacent parameter values into four parts,
+inserting three linearly interpolated curves. `N` is a positive integer; `1`
+leaves the grid unchanged. Interpolation uses the physical parameter spacing,
+retains the original samples and does not extrapolate or interpolate along the
+curve coordinate. It also works with `--stack-axis x` and `--link-data`.
+With logarithmic colors (`-lcb` / `--clog`), intensity values are still interpolated
+linearly before applying the logarithmic color scale. Interpolated rows are
+estimates, not additional measurements. The default embedded project stores
+the refined map; linked projects recompute it from the sources.
 
 ### Save, edit and reuse
 

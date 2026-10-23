@@ -31,7 +31,15 @@ Blank lines separate XY curves. Gzip and Fortran D exponents are accepted.
   --link-data                  script rereads original files and formulas
   --type TYPE                  xy (default), image, intensity, scatter-color,
                                line3d, scatter3d, surface
+  --stack-values FILE          one parameter value per input XY curve file
+  --stack-axis y|x             parameter axis: rows (y, default) or columns (x)
+  --interpolate N              N subintervals per parameter interval (linear; stack only)
+  -cbMIN:MAX                   colorbar limits (alias for --clim MIN:MAX)
+  -zMIN:MAX                    3D Z limits (alias for --z MIN:MAX)
+  -lcb                         logarithmic colorbar (alias for --clog)
+  -lz                          logarithmic 3D Z axis (alias for --lz)
   --cmap NAME --clim MIN:MAX --clog   colormap, color limits, log colors
+  -cbtTEXT                     colorbar label; quote spaces/math, e.g. '-cbt$A(\\omega)$'
   --cb-label TEXT              colorbar label
   --extent XMIN:XMAX:YMIN:YMAX  image matrix boundaries; origin lower
   --aspect auto|equal          2D aspect ratio
@@ -39,10 +47,16 @@ Blank lines separate XY curves. Gzip and Fortran D exponents are accepted.
   --                           following arguments are filenames
 
 Intensity/surface: one complete rectangular x:y:z grid, any row order.
+Intensity also supports --stack-values: one XY curve per file, common sample grid.
+Values pair with files in CLI order; --stack-axis y puts each curve in a row.
 Image: one rectangular matrix; no -u. No implicit interpolation of sparse data.
 Selection/style options apply to subsequent files; axes/type/colorbar are global.
 Click XY points to inspect coordinates; click curve legends to toggle visibility.
 Saved scripts: python3 figure.py [--no-gui] [--export figure.pdf]
+
+Example: parameter sweep with interpolation, log intensity and colorbar label:
+  mplot --stack-values parameters.dat --interpolate 4 -lcb -cb0.001:1 '-cbtIntensity' curve_*.dat
+  Use '-cbt$A(\\omega,U)$' for a mathtext label; --cb-label TEXT is equivalent.
 """
 
 PALETTES = {
@@ -154,8 +168,9 @@ def parse(argv):
                 legend=None, dirs=None, size=(1024, 768), save=None, show=False,
                 gui=True, palette=None, kind='xy', cmap='viridis', clim=None, clog=False,
                 extent=None, aspect='auto', z=None, zt='', lz=False, cbt='',
-                export=None, link=False, grid=True)
+                export=None, link=False, grid=True, stack_values=None, stack_axis=None, interpolate=None)
     files = []
+    explicit_kind = False
     positional = False
     args = iter(argv)
     for arg in args:
@@ -173,12 +188,16 @@ def parse(argv):
             print('\n'.join(sorted(colors)))
             raise SystemExit(0)
         key, sep, inline = arg.partition('=')
-        if key in ('--type', '--cmap', '--clim', '--extent', '--aspect', '--export', '--cb-label', '--zt', '--z'):
+        if key in ('--type', '--cmap', '--clim', '--extent', '--aspect', '--export', '--cb-label', '--zt', '--z', '--stack-values', '--stack-axis', '--interpolate'):
             value = inline if sep else next(args, None)
             if value is None:
                 raise PlotError(f'{key} requires a value')
             name = {'--type':'kind', '--cb-label':'cbt', '--zt':'zt', '--z':'z'}.get(key, key[2:])
-            if key in ('--clim', '--z'):
+            if key == '--interpolate':
+                if not re.fullmatch(r'[1-9]\d*', value):
+                    raise PlotError('--interpolate requires a positive integer (e.g. 4)')
+                value = int(value)
+            elif key in ('--clim', '--z'):
                 value = numeric_pair(value, key)
             elif key == '--extent':
                 try:
@@ -191,10 +210,12 @@ def parse(argv):
                 raise PlotError('unknown plot type ' + value)
             elif key == '--aspect' and value not in ('auto','equal'):
                 raise PlotError('--aspect must be auto or equal')
-            opts[name] = value
+            opts[name.replace('-', '_')] = value
+            if key == '--type':
+                explicit_kind = True
             continue
-        if arg in ('--clog', '--link-data', '--lz'):
-            opts[{'--clog':'clog','--link-data':'link','--lz':'lz'}[arg]] = True
+        if arg in ('--clog', '--link-data', '--lz', '-lcb', '-lz'):
+            opts[{'--clog':'clog','--link-data':'link','--lz':'lz', '-lcb':'clog', '-lz':'lz'}[arg]] = True
             continue
         if arg == '--no-gui':
             opts['gui'] = False
@@ -235,6 +256,12 @@ def parse(argv):
                 raise PlotError(f'{arg[:3]} needs a nonnegative finite number')
         elif arg.startswith('-xt') or arg.startswith('-yt'):
             opts[arg[1:3]] = arg[3:]
+        elif arg.startswith('-cbt'):
+            opts['cbt'] = arg[4:]
+        elif arg.startswith('-cb'):
+            opts['clim'] = numeric_pair(arg[3:], '-cb')
+        elif arg.startswith('-z'):
+            opts['z'] = numeric_pair(arg[2:], '-z')
         elif arg.startswith('-x') or arg.startswith('-y'):
             opts[arg[1]] = numeric_pair(arg[2:], arg[:2])
         elif arg.startswith('-t'):
@@ -283,6 +310,17 @@ def parse(argv):
             raise PlotError(f'unknown option {arg!r}')
         else:
             files.append((arg, copy.deepcopy(state)))
+    if opts['stack_values'] is not None:
+        if explicit_kind and opts['kind'] != 'intensity':
+            raise PlotError('--stack-values requires --type intensity')
+        opts['kind'] = 'intensity'
+        opts['stack_axis'] = opts['stack_axis'] or 'y'
+        if opts['stack_axis'] not in ('x', 'y'):
+            raise PlotError('--stack-axis must be x or y')
+    elif opts['stack_axis'] is not None:
+        raise PlotError('--stack-axis requires --stack-values')
+    if opts['interpolate'] is not None and opts['stack_values'] is None:
+        raise PlotError('--interpolate requires --stack-values')
     return opts, files, state
 
 
@@ -354,7 +392,79 @@ def palette_colors(value, n):
 
 
 
+def prepare_stack(opts, files):
+    """Assemble one XY curve per file into a parameter-resolved intensity map."""
+    import numpy as np
+
+    if len(files) < 2:
+        raise PlotError('--stack-values requires at least two curve files')
+    if opts['stack_values'] == '-':
+        raise PlotError('--stack-values requires a named parameter file')
+    for path, state in files:
+        if (state['stype'] != 'xy' or state['all'] or state['shift'] is not None
+                or len(state['using'] or ['1:2']) != 1):
+            raise PlotError(f'{path}: stacked maps require one XY selection per file; no -k, -uall or error bars')
+
+    parameter_rows = [row for block in read_blocks(opts['stack_values']) for row in block]
+    if any(len(row) != 1 for row in parameter_rows):
+        raise PlotError('--stack-values file must contain exactly one numeric column')
+    parameters = [row[0] for row in parameter_rows]
+    if len(parameters) != len(files):
+        raise PlotError(f'parameter count ({len(parameters)}) must match curve file count ({len(files)})')
+    if not all(math.isfinite(value) for value in parameters):
+        raise PlotError('parameter values must be finite')
+    if len(set(parameters)) != len(parameters):
+        raise PlotError('parameter values must be distinct')
+
+    reference = None
+    columns = [[], [], []]
+    xy_opts = dict(opts, kind='xy', stack_values=None)
+    for parameter, (path, state) in zip(parameters, files):
+        curves = prepare_series(xy_opts, [(path, state)])
+        if len(curves) != 1:
+            raise PlotError(f'{path}: expected exactly one data block/curve')
+        coordinate, intensity = (np.asarray(col) for col in curves[0]['cols'])
+        order = np.argsort(coordinate)
+        coordinate, intensity = coordinate[order], intensity[order]
+        if len(coordinate) < 2 or len(np.unique(coordinate)) != len(coordinate):
+            raise PlotError(f'{path}: curve coordinates must contain at least two distinct samples and no duplicates')
+        if reference is None:
+            reference = coordinate
+        elif len(coordinate) != len(reference) or not np.allclose(coordinate, reference, rtol=1e-10, atol=1e-12):
+            raise PlotError(f'{path}: curve grid differs from the first file; resample explicitly before stacking')
+        # Align coordinate round-off only; interpolation below acts on the parameter.
+        for sample, value in zip(reference, intensity):
+            x, y = (sample, parameter) if opts['stack_axis'] == 'y' else (parameter, sample)
+            columns[0].append(float(x))
+            columns[1].append(float(y))
+            columns[2].append(float(value))
+    if (opts.get('interpolate') or 1) > 1:
+        xs, ys, grid = rectangular_grid(columns)
+        parameters = ys if opts['stack_axis'] == 'y' else xs
+        intensity = grid if opts['stack_axis'] == 'y' else grid.T
+        fine_parameters = np.concatenate([
+            np.linspace(left, right, opts['interpolate'], endpoint=False)
+            for left, right in zip(parameters[:-1], parameters[1:])
+        ] + [parameters[-1:]])
+        fine_intensity = np.column_stack([
+            np.interp(fine_parameters, parameters, values) for values in intensity.T
+        ])
+        if not np.all(np.isfinite(fine_intensity)):
+            raise PlotError('non-finite interpolated intensity')
+        if opts['stack_axis'] == 'y':
+            xx, yy = np.meshgrid(xs, fine_parameters)
+            zz = fine_intensity
+        else:
+            xx, yy = np.meshgrid(fine_parameters, ys)
+            zz = fine_intensity.T
+        columns = [xx.ravel().tolist(), yy.ravel().tolist(), zz.ravel().tolist()]
+    return [dict(path='stack: ' + opts['stack_values'], block=1, blocks=1,
+                 spec='1:2:3', state=initial_state(), cols=columns)]
+
+
 def prepare_series(opts, files):
+    if opts.get('stack_values') is not None:
+        return prepare_stack(opts, files)
     series = []
     kind = opts['kind']
     if kind != 'xy' and any(state['stype'] != 'xy' or state['all'] for _,state in files):
@@ -579,11 +689,80 @@ def script_column(spec, data='data'):
     return f'np.array([{result} for row in {data}], dtype=float)'
 
 
+def emit_linked_stack(add, opts, files):
+    """Emit plain, editable code to reload curves and their parameter values."""
+    add('    # One parameter per source, paired in command-line order.')
+    add('    parameter_blocks = read_data(PARAMETER_SOURCE)')
+    add('    if any(block.shape[1] != 1 for block in parameter_blocks):')
+    add("        raise ValueError('Parameter file must contain exactly one column')")
+    add('    parameters = np.concatenate(parameter_blocks, axis=0)[:, 0]')
+    add(f'    if len(parameters) != {len(files)}:')
+    add("        raise ValueError('Parameter count must match the number of curve files')")
+    add('    if not np.all(np.isfinite(parameters)):')
+    add("        raise ValueError('Non-finite parameter value')")
+    add('    if len(np.unique(parameters)) != len(parameters):')
+    add("        raise ValueError('Duplicate parameter values')")
+    for i, (_, state) in enumerate(files, 1):
+        selection = (state['using'] or ['1:2'])[0]
+        parts = selection.split(':')
+        add()
+        add(f'    # Curve {i}, paired with parameters[{i - 1}].')
+        add(f'    blocks = read_data(SOURCE_{i})')
+        add('    if len(blocks) != 1:')
+        add("        raise ValueError('Each curve file must contain exactly one data block')")
+        add('    data = blocks[0]')
+        add('    coordinate = ' + script_column(parts[0]))
+        add('    intensity = ' + script_column(parts[1]))
+        add('    if not np.all(np.isfinite(coordinate)) or not np.all(np.isfinite(intensity)):')
+        add("        raise ValueError('Non-finite curve data or expression result')")
+        add('    order = np.argsort(coordinate)')
+        add('    coordinate = coordinate[order]')
+        add(f'    intensity_{i} = intensity[order]')
+        add('    if len(coordinate) < 2 or len(np.unique(coordinate)) != len(coordinate):')
+        add("        raise ValueError('Curve coordinates need at least two samples and no duplicates')")
+        if i == 1:
+            add('    samples = coordinate')
+        else:
+            add('    if len(coordinate) != len(samples) or not np.allclose(coordinate, samples, rtol=1e-10, atol=1e-12):')
+            add(f"        raise ValueError('Curve {i} grid differs from the first file; resample explicitly')")
+    add()
+    add('    # Sort the parameter axis while keeping every curve paired with its value.')
+    add('    order = np.argsort(parameters)')
+    add('    parameters = parameters[order]')
+    add('    intensity = np.vstack([' + ', '.join(f'intensity_{i}' for i in range(1, len(files) + 1)) + '])[order]')
+    if (opts.get('interpolate') or 1) > 1:
+        add()
+        add('    # Linear interpolation in the physical parameter, not in the colors.')
+        add('    # Original samples are retained; there is no extrapolation.')
+        add(f'    subdivisions = {opts["interpolate"]}')
+        add('    fine_parameters = np.concatenate([')
+        add('        np.linspace(left, right, subdivisions, endpoint=False)')
+        add('        for left, right in zip(parameters[:-1], parameters[1:])')
+        add('    ] + [parameters[-1:]])')
+        add('    intensity = np.column_stack([')
+        add('        np.interp(fine_parameters, parameters, values)')
+        add('        for values in intensity.T')
+        add('    ])')
+        add('    if not np.all(np.isfinite(intensity)):')
+        add("        raise ValueError('Non-finite interpolated intensity')")
+        add('    parameters = fine_parameters')
+    if opts['stack_axis'] == 'y':
+        add('    x, y, z = samples, parameters, intensity  # One curve per row.')
+    else:
+        add('    x, y, z = parameters, samples, intensity.T  # One curve per column.')
+    for axis in ('x', 'y'):
+        if opts['l' + axis]:
+            add(f'    if np.any({axis} <= 0):')
+            add(f"        raise ValueError('Logarithmic {axis} requires positive coordinates')")
+    add()
+
+
 def make_script(opts, files, series):
     """Write the actual plot, rather than serializing mplot's implementation."""
     import textwrap
 
     kind = opts['kind']
+    stacked = opts.get('stack_values') is not None
     is3d = kind in ('line3d', 'scatter3d', 'surface')
     colored = kind in ('image', 'intensity', 'scatter-color', 'surface')
     colors = palette_colors(opts['palette'], len(series))
@@ -598,11 +777,13 @@ def make_script(opts, files, series):
         '"""',
         'import numpy as np',
     ]
+    source_paths = [path for path, _ in files] + ([opts['stack_values']] if stacked else [])
     if opts['link']:
+        selections = [(state['using'] or ['1:2'])[0] for _, state in files] if stacked else [item['spec'] for item in series]
         if kind != 'image' and any('math.' in script_column(part)
-                                   for item in series for part in item['spec'].split(':')):
+                                   for selection in selections for part in selection.split(':')):
             lines.append('import math')
-        if any(path.endswith('.gz') for path, _ in files):
+        if any(path.endswith('.gz') for path in source_paths):
             lines.append('import gzip')
     if colored:
         lines.append('from matplotlib.colors import LogNorm' if opts['clog']
@@ -625,6 +806,8 @@ def make_script(opts, files, series):
         add('# These source paths are absolute. Edit them if you move the data files.')
         for i, (path, _) in enumerate(files, 1):
             add(f'SOURCE_{i} = {str(Path(path).resolve())!r}')
+        if stacked:
+            add(f'PARAMETER_SOURCE = {str(Path(opts["stack_values"]).resolve())!r}')
         add()
         add(textwrap.dedent('''\
             def read_data(path):
@@ -657,12 +840,14 @@ def make_script(opts, files, series):
                 return blocks
             ''').replace('OPEN_STREAM',
                          "stream = gzip.open(path, 'rt') if path.endswith('.gz') else open(path)"
-                         if any(path.endswith('.gz') for path, _ in files)
+                         if any(path.endswith('.gz') for path in source_paths)
                          else 'stream = open(path)'))
     else:
         for i, item in enumerate(series, 1):
             source = f'{item["path"]}, block {item["block"]}, selection {item["spec"]}'
             add('# ' + source.replace('\n', ' ').replace('\r', ' '))
+            if stacked and (opts.get('interpolate') or 1) > 1:
+                add(f'# Includes linear interpolation along the parameter axis: factor {opts["interpolate"]}.')
             if kind == 'image':
                 array(f'image_{i}', item['cols'])
             elif kind in ('intensity', 'surface'):
@@ -683,7 +868,7 @@ def make_script(opts, files, series):
                 array(f'data_{i}', zip(*item['cols']))
             add()
 
-    if opts['link'] and kind in ('intensity', 'surface'):
+    if opts['link'] and kind in ('intensity', 'surface') and not stacked:
         add(textwrap.dedent('''\
             def make_grid(x, y, z):
                 """Reorder a complete rectangular grid without interpolating."""
@@ -717,7 +902,9 @@ def make_script(opts, files, series):
         add('    curves = []  # Used only by the mouse interactions at the end.')
     add()
     add('    # 3. Prepare coordinates and draw the plot.')
-    if opts['link']:
+    if opts['link'] and stacked:
+        emit_linked_stack(add, opts, files)
+    elif opts['link']:
         for i, (path, _) in enumerate(files, 1):
             add(f'    blocks_{i} = read_data(SOURCE_{i})')
             if kind in ('image', 'intensity', 'surface'):
@@ -744,7 +931,9 @@ def make_script(opts, files, series):
     # Share color normalization, including data-dependent limits on linked inputs.
     if colored:
         if opts['link']:
-            if kind == 'image':
+            if stacked:
+                add('    color_values = z.ravel()')
+            elif kind == 'image':
                 add('    color_values = blocks_1[0].ravel()')
             else:
                 color_exprs = []
@@ -872,6 +1061,9 @@ def make_script(opts, files, series):
             marker = markers[(symbol - 1 if symbol else i - 1) % len(markers)] if state['style'] != 'l' and symbol != 0 else None
             draw(state, repr(label_for(item)), repr(colors[i - 1]), repr(marker))
             add()
+    elif stacked:
+        draw(series[0]['state'], repr('stacked curves'), repr(colors[0]), 'None')
+        add()
     else:
         for i, (path, state) in enumerate(files, 1):
             add(f'    # Source {i}: change column selections and formulas here.')
@@ -1065,6 +1257,8 @@ def main(argv=None):
         import matplotlib
         matplotlib.use('Agg')
     inputs={Path(path).resolve() for path,_ in files if path!='-'}
+    if opts.get('stack_values') and opts['stack_values'] != '-':
+        inputs.add(Path(opts['stack_values']).resolve())
     for destination in (opts['save'],opts['export']):
         if destination and Path(destination).resolve() in inputs:
             raise PlotError('output must not overwrite an input file')
