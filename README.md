@@ -24,6 +24,30 @@ checkout then launches
 For another installation, change `$prog0` in `xplot` or `command` in `xmplot` to the appropriate Grace executable.
 
 
+## Installation
+
+```sh
+make                         # Check dependencies, then install all three scripts.
+make check                   # Check only; do not install.
+make DIREX=/another/path     # Override DIREX=$(HOME)/.scripts.
+make install-mplot           # Install only mplot, under the name plot.
+make install-xplot           # Install only xplot.
+make install-xmplot          # Install only xmplot.
+```
+
+The default installation copies `mplot` → `plot`, `xplot` → `xplot`, and
+`xmplot` → `xmplot` into `$HOME/.scripts`, with executable permissions.
+Add `export PATH="$HOME/.scripts:$PATH"` to your shell configuration if needed.
+You can also edit `DIREX` directly in the Makefile.
+
+Checks cover Python/Matplotlib versions, NumPy, Perl modules, the configured
+Grace executables, and Matplotlib's selected GUI toolkit. Failed checks print
+installation/configuration suggestions; no packages are installed automatically.
+For headless use, run `make CHECK_GUI=0` and use `plot --no-gui ...`.
+The GUI check imports the toolkit but does not open a window or verify a display.
+The installed Python scripts use `python3` from `PATH`; keep the required Python
+environment active when running them.
+
 ## Common syntax
 
 Options are attached to their values: `-u1:3`, `-x-2:2`, `-sfigure.py`.
