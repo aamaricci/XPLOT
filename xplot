@@ -999,7 +999,7 @@ $fbatch= get_temp_filename('xgbatch.'.$login);
 open(FBATCH, ">" . $fbatch);
 print FBATCH "autoscale\n";
 $noautoscale=1;
-$prog0 = "xmgrace ";		# main command xmgrace
+$prog0 = "/Applications/qtgrace.app/Contents/MacOS/qtgrace ";		# main command xmgrace leave a blank space
 $prog1 = "-free ";		# free format 
 $prog2 = "-param $cfgfile ";	# use parameter file
 $progB = "-batch $fbatch ";	# use the batch file

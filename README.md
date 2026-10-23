@@ -1,42 +1,132 @@
-# xplot e xplot-veusz
+# xplot, xmplot and mplot
 
-`xplot-veusz` è la versione per [Veusz](https://veusz.github.io/) del vecchio wrapper Perl `xplot` per XmGrace. Accetta dati numerici da file, `.gz` e standard input, genera un documento Veusz `.vsz` con i dati incorporati e lo apre nella GUI. Curve, assi, legenda e dati restano modificabili in Veusz. Il comando originale `xplot` rimane disponibile.
+Command-line plotting of numeric data, with a shared compact syntax and editable
+output. Use `./PROGRAM -h` for the full option list.
 
-Richiede Python 3.9+ e Veusz installato. Su macOS lo script passa il documento a `/Applications/Veusz.app` tramite Launch Services: se Veusz è già aperto, il nuovo plot usa lo stesso processo e si apre più rapidamente in una nuova finestra. La prima apertura avvia Veusz normalmente; chiudendo tutte le sue finestre, l'app termina e la volta successiva deve riavviarsi. Un alias della shell non è visibile ai processi Python, ma con l'app in quella posizione non serve. Fuori da macOS viene cercato il comando `veusz` nel `PATH`. Per installare lo script in una directory nel `PATH`, copiare **insieme** `xplot-veusz` e `xplot-veusz-colors.json` nella stessa directory.
+| Program | Backend | Requirements | Saved project |
+| --- | --- | --- | --- |
+| `xplot` | Grace / QtGrace | Perl, including `Archive::Extract` | `.agr` |
+| `xmplot` | Grace / QtGrace | Python 3.9+ (standard library only) | Self-contained `.agr` |
+| `mplot` | Matplotlib | Python 3.9+, NumPy, Matplotlib ≥3.7 | Standalone `.py` |
+
+Run the scripts from this directory or copy the executables into your `PATH`.
+`xmplot` and `mplot` need no companion files. Interactive Matplotlib windows
+require a GUI backend, such as macOS, QtAgg or TkAgg.
+
+
+**Grace configuration:** In macOS systems the Xquartz server used in
+official xmgrace application `brew install grace` lags a lot. A fix is
+to use QTgrace instead. The `xplot` and `xmplot` scripts in this
+checkout then launches
+`/Applications/qtgrace.app/Contents/MacOS/qtgrace` from both `xplot` and
+`xmplot`. 
+
+For another installation, change `$prog0` in `xplot` or `command` in `xmplot` to the appropriate Grace executable.
+
+
+## Common syntax
+
+Options are attached to their values: `-u1:3`, `-x-2:2`, `-sfigure.py`.
+Column numbers start at **1**. Quote formulas with **single quotes** to protect
+`$N` from shell expansion.
+
+| Option | Meaning |
+| --- | --- |
+| `-u1:2,1:3` | Plot column 1 against columns 2 and 3 |
+| `-uall`, `-uone` | All Y columns against column 1; restore default selection |
+| `-stxy`, `-stxydx`, `-stxydy`, `-stxydxdy` | XY data, optionally with symmetric X/Y errors |
+| `-xMIN:MAX`, `-yMIN:MAX`, `-lx`, `-ly` | Axis limits and logarithmic scales |
+| `-tTEXT`, `-xtTEXT`, `-ytTEXT` | Title and axis labels (`-t` is a subtitle in Grace) |
+| `-l`, `-d[N]` | Legend using filenames or directories |
+| `-wl`, `-wp`, `-wlp[:N]`, `-lwN`, `-psN` | Lines, points, symbol number, line width and symbol size |
+| `-kN`, `-cSCHEME` | Vertical curve offset and curve color palette |
+| `-sFILE`, `-show` | Save a project; print generated commands/project/script |
+
+The Python tools (`xmplot`, `mplot`) also support `-LTEXT` for a custom legend,
+`--no-gui` for generation without opening a window, and `--` before filenames
+starting with a dash. Selection/style options apply to subsequent files; axes,
+title, palette and legend mode are global. `-st` resets the column selection:
+put a custom `-u` after it.
+
+They read plain text, `.gz` and stdin; blank lines or `&` separate curves.
+Comments (`#`), Grace metadata (`@`) and Fortran `D` exponents are accepted.
+With no files they read stdin; use `-` to position stdin explicitly. Formulas
+support multiple `$N` columns, arithmetic, `**` or `^`, functions such as `sin`,
+`cos`, `sqrt`, `log`, `atan2`, and constants **`pi`** and **`e`**. These extended
+expression guarantees do not apply to legacy `xplot`.
+
+## xplot — legacy Grace wrapper
+
+Retained for existing workflows. For new work, `xmplot` provides validated input,
+correct multi-column formulas and safer file/process handling.
 
 ```sh
-./xplot-veusz data.dat
-./xplot-veusz -u1:3 -x-1:1 data.1* -u1:2 data.0
-cat data.dat | ./xplot-veusz -uall -squick.vsz
-./xplot-veusz -stxydy -wlp -l -csolar measurements.dat
-./xplot-veusz '-u1:cos($2)' -sfunction.vsz data.dat
-./xplot-veusz '-xt$\omega_n$' '-yt$\Sigma_{xx}$' '-L$\chi(i\omega_n)$' data.dat
+./xplot data.dat
+./xplot -u1:3 -x-1:1 -l data.dat
+./xplot -stxydy -u1:2:4 -wlp -sfigure.agr measurements.dat
+cat data.dat | ./xplot -uall
 ```
 
-`-sFILE` salva direttamente il documento modificabile `FILE.vsz`. Senza `-s`, ne viene creato uno temporaneo in `/tmp`, che rimane disponibile dopo la chiusura della GUI. `--no-gui` genera il file senza aprire Veusz e ne stampa il percorso. `-show` mostra tutti i comandi Veusz generati. `-h` elenca le opzioni.
+## xmplot — validated Grace projects
 
-Titolo (`-t`), assi (`-xt`, `-yt`) e legenda personalizzata (`-L`, applicata ai file successivi) accettano la [sintassi testuale simile a LaTeX di Veusz](https://veusz.github.io/docs/manual/introduction.html#text): lettere greche come `\omega`, indici `_`, esponenti `^` e frazioni `\frac{a}{b}`. Lo script elimina gli eventuali delimitatori matematici `$...$`, che Veusz non richiede. Non è un interprete LaTeX completo: pacchetti e comandi non previsti da Veusz non vengono renderizzati. Quotare l'argomento nella shell per proteggere `$` e `\`.
+Creates a self-contained `.agr` containing transformed data, styles and error
+bars, then opens it in Grace. Input errors are reported before plotting.
+Without `-s`, a unique temporary project is retained. `--no-gui` prints its path;
+`-show` prints the project and still opens the GUI unless combined with
+`--no-gui`.
 
-Per impostazione predefinita ogni curva ha linea e simboli da **6 pt** (`-wlp -ps2`). Sulle curve con molti punti sono mostrati circa 30 simboli distribuiti lungo tutta la curva, mentre la linea usa tutti i dati. I colori seguono una sequenza di 12 tinte, nell'ordine: nero, rosso, blu, verde, arancione, viola, ciano, magenta, marrone, ottanio, oliva e grigio scuro; dalla tredicesima curva la sequenza ricomincia. `-wl`, `-wp`, `-psN` e `-cSCHEME` sostituiscono queste impostazioni quando servono stili diversi.
+```sh
+./xmplot -u1:3 a.dat.gz -u1:2 b.dat
+./xmplot '-u$1/pi:$2+$3' -l -sfigure.agr data.dat
+./xmplot -stxydy -u1:2:4 -wlp measurements.dat
+cat data.dat | ./xmplot --no-gui -uall -sfigure.agr
+```
 
-## Opzioni compatibili
+## mplot — Matplotlib, intensity and 3D
 
-| Opzione | Effetto |
-| --- | --- |
-| `-u1:2,1:3`, `-uall`, `-uone` | Colonne numerate da 1; tutte le colonne successive alla prima; coppia predefinita |
-| `-u1:'cos($2)'` | Trasformazioni matematiche delle colonne (`$N`), anche con più colonne nella stessa formula |
-| `-stxy`, `-stxydx`, `-stxydy`, `-stxydxdy` | Curve XY e barre d'errore simmetriche |
-| `-xMIN:MAX`, `-yMIN:MAX`, `-lx`, `-ly` | Limiti degli assi e scala logaritmica |
-| `-tTEXT`, `-xtTEXT`, `-ytTEXT` | Titolo ed etichette degli assi |
-| `-LTEXT` | Testo della legenda per i file successivi; attiva la legenda |
-| `-wl`, `-wp`, `-wlp[:N]`, `-lwN`, `-psN` | Linee, simboli, spessori e dimensioni; predefinito `-wlp -ps2` |
-| `-l`, `-d[N]`, `-kN` | Legenda per file/directory; spostamento verticale delle curve |
-| `-cSCHEME`, `-clist` | Gradienti `default`, `solar`, `jamaica`, `rainbow`, `matplotlib` o colori X11/hex separati da `:`; elenco nomi |
-| `-m[WIDTH:HEIGHT]` | Dimensioni della pagina; pixel convertiti assumendo 96 dpi |
-| `-sFILE`, `-show`, `--no-gui` | Salvataggio, ispezione dei comandi e uso senza GUI |
+The default is an XY line plot with a very light gray grid. Use `--no-grid` to
+remove the grid. The toolbar provides zoom, pan and image export; click XY
+points to inspect coordinates or legend symbols to toggle curves. 3D plots
+support mouse rotation.
 
-Le opzioni `-u`, `-st`, `-w`, `-lw`, `-ps` e `-k` possono comparire tra i file e si applicano a quelli successivi. I blocchi separati da righe vuote diventano curve distinte. I dati sono incorporati nel `.vsz`, quindi il documento non dipende dai file originali, compresi stdin e `.gz`.
+```sh
+./mplot -u'$1/pi:2' -l '-xt$\omega/\pi$' data.dat
+./mplot --no-grid -stxydy -u1:2:4 -wlp measurements.dat
+./mplot --type intensity -u1:2:3 --cmap magma --cb-label 'A(k,omega)' spectral.dat
+./mplot --type image --extent=-3:3:-2:2 --aspect equal matrix.dat
+./mplot --type scatter-color -u1:2:3 points.dat
+./mplot --type line3d --zt z trajectory.dat
+./mplot --type surface --cmap viridis surface.dat
+```
 
-Le espressioni sono valutate sui dati durante la generazione e i risultati sono salvati nel documento; le formule non restano collegate ai dati sorgente. Le opzioni globali per assi, titolo, legenda e palette prendono l'ultimo valore specificato. Alcuni dettagli estetici di XmGrace non hanno un equivalente identico in Veusz, in particolare font e numerazione dei simboli.
+`intensity` and `surface` require one complete rectangular `x:y:z` grid (row
+order is arbitrary; missing or duplicate points are rejected). No interpolation
+is applied. `image` reads a rectangular matrix, with origin at the bottom and
+`--extent` specifying its outer boundaries. `scatter-color` accepts scattered
+points; `scatter3d` is also available. `--cmap`, `--clim MIN:MAX`, `--clog` and
+`--cb-label` control colors; logarithmic colors require positive values.
+Use `--z MIN:MAX`, `--zt TEXT`, `--lz` for the 3D Z axis.
 
-La [documentazione ufficiale dell'API Veusz](https://veusz.github.io/docs/manual/api.html) descrive i comandi usati nel `.vsz`; la [guida ai dataset](https://veusz.github.io/docs/manual/datasets.html) descrive come modificarli dalla GUI.
+### Save, edit and reuse
+
+`-sfigure.py` writes a readable script with embedded transformed data and direct,
+commented Matplotlib calls in `create_figure()`. It runs independently of
+`mplot`, even after the original data files are moved or deleted.
+
+```sh
+./mplot '-u$1/pi:2' -sfigure.py data.dat
+python3 figure.py
+python3 figure.py --no-gui --export figure.pdf
+
+# Generate both an editable script and an image without opening a window.
+./mplot --no-gui -sfigure.py --export figure.png data.dat
+
+# Reread source files and recompute formulas whenever the saved script is run.
+./mplot --link-data '-u$1/pi:2' -supdate.py data.dat
+```
+
+`--link-data` saves absolute source paths instead of embedding data and cannot
+reference stdin. Without `-s`, a unique temporary script is retained and its
+path is printed. Saving replaces an existing output file. Mouse interactions
+change the current window, not the saved script: edit `create_figure()` to
+persist labels, limits, styles or grid settings.

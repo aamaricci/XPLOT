@@ -1,0 +1,1103 @@
+#!/usr/bin/env python3
+"""Validated command-line plotting with Matplotlib; compatible with xplot options."""
+import ast
+import copy
+import gzip
+import math
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+HELP = """Usage: mplot [options] [files ...]
+Python 3.9+, NumPy and Matplotlib >=3.7. No files: read stdin; '-' positions stdin.
+Blank lines separate XY curves. Gzip and Fortran D exponents are accepted.
+
+  -u1:2,1:3     1-based columns; formulas: '-u1:$2+$3'; function commas supported
+  -uall -uone   all Y columns / restore defaults (single column: index vs value)
+  -stxy|xydx|xydy|xydxdy   XY error bars; resets column selection
+  -xMIN:MAX -yMIN:MAX -lx -ly    axes limits and logarithmic scales
+  -tTEXT -xtTEXT -ytTEXT         title and axis labels (Matplotlib mathtext)
+  -l -d[N] -LTEXT               filename/directory/custom legend
+  -wl|-wp|-wlp[:N] -lwN -psN    style, width, marker size (3*N points)
+  -kN -cSCHEME -clist           Y shift, curve palette, color list
+  -mWIDTH:HEIGHT                figure size in pixels at 100 dpi
+  -sFILE                       save editable standalone Python project
+  -show                        print generated script (still opens GUI)
+  --no-gui                     generate without GUI; print project path
+  --no-grid                    hide the default very light gray grid
+  --export FILE                also save PDF, SVG, PNG, ...
+  --link-data                  script rereads original files and formulas
+  --type TYPE                  xy (default), image, intensity, scatter-color,
+                               line3d, scatter3d, surface
+  --cmap NAME --clim MIN:MAX --clog   colormap, color limits, log colors
+  --cb-label TEXT              colorbar label
+  --extent XMIN:XMAX:YMIN:YMAX  image matrix boundaries; origin lower
+  --aspect auto|equal          2D aspect ratio
+  --z MIN:MAX --zt TEXT --lz    3D Z limits, label and logarithmic scale
+  --                           following arguments are filenames
+
+Intensity/surface: one complete rectangular x:y:z grid, any row order.
+Image: one rectangular matrix; no -u. No implicit interpolation of sparse data.
+Selection/style options apply to subsequent files; axes/type/colorbar are global.
+Click XY points to inspect coordinates; click curve legends to toggle visibility.
+Saved scripts: python3 figure.py [--no-gui] [--export figure.pdf]
+"""
+
+PALETTES = {
+    'default': ['midnightblue', 'firebrick', 'gold'],
+    'solar': ['black', 'crimson', 'gold'],
+    'jamaica': ['dark green', 'yellow', 'red'],
+    'rainbow': ['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple'],
+    'matplotlib': ['Pcolor1', 'Pcolor2', 'Pcolor3', 'Pcolor4', 'Pcolor5',
+                   'Pcolor6', 'Pcolor7', 'Pcolor8', 'Pcolor9'],
+}
+DEFAULT_SERIES_COLORS = (
+    '#000000',  # black
+    '#d62728',  # red
+    '#1f77b4',  # blue
+    '#2ca02c',  # green
+    '#ff7f0e',  # orange
+    '#9467bd',  # purple
+    '#17becf',  # cyan
+    '#e377c2',  # magenta
+    '#8c564b',  # brown
+    '#008080',  # teal
+    '#808000',  # olive
+    '#555555',  # dark grey
+)
+FUNCS = {name: getattr(math, name) for name in (
+    'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
+    'exp', 'log', 'log10', 'sqrt', 'fabs', 'floor', 'ceil', 'atan2', 'hypot')}
+FUNCS.update(abs=abs, min=min, max=max, pow=pow)
+CONSTANTS = {'pi': math.pi, 'e': math.e}
+
+
+class PlotError(Exception):
+    pass
+
+
+def color_names():
+    return {'AliceBlue': '#f0f8ff', 'AntiqueWhite': '#faebd7', 'AntiqueWhite1': '#ffefdb', 'AntiqueWhite2': '#eedfcc', 'AntiqueWhite3': '#cdc0b0', 'AntiqueWhite4': '#8b8378', 'BlanchedAlmond': '#ffebcd', 'BlueViolet': '#8a2be2', 'CadetBlue': '#5f9ea0', 'CadetBlue1': '#98f5ff', 'CadetBlue2': '#8ee5ee', 'CadetBlue3': '#7ac5cd', 'CadetBlue4': '#53868b', 'CornflowerBlue': '#6495ed', 'DarkBlue': '#00008b', 'DarkCyan': '#008b8b', 'DarkGoldenrod': '#b8860b', 'DarkGoldenrod1': '#ffb90f', 'DarkGoldenrod2': '#eead0e', 'DarkGoldenrod3': '#cd950c', 'DarkGoldenrod4': '#8b6508', 'DarkGray': '#a9a9a9', 'DarkGreen': '#006400', 'DarkGrey': '#a9a9a9', 'DarkKhaki': '#bdb76b', 'DarkMagenta': '#8b008b', 'DarkOliveGreen': '#556b2f', 'DarkOliveGreen1': '#caff70', 'DarkOliveGreen2': '#bcee68', 'DarkOliveGreen3': '#a2cd5a', 'DarkOliveGreen4': '#6e8b3d', 'DarkOrange': '#ff8c00', 'DarkOrange1': '#ff7f00', 'DarkOrange2': '#ee7600', 'DarkOrange3': '#cd6600', 'DarkOrange4': '#8b4500', 'DarkOrchid': '#9932cc', 'DarkOrchid1': '#bf3eff', 'DarkOrchid2': '#b23aee', 'DarkOrchid3': '#9a32cd', 'DarkOrchid4': '#68228b', 'DarkRed': '#8b0000', 'DarkSalmon': '#e9967a', 'DarkSeaGreen': '#8fbc8f', 'DarkSeaGreen1': '#c1ffc1', 'DarkSeaGreen2': '#b4eeb4', 'DarkSeaGreen3': '#9bcd9b', 'DarkSeaGreen4': '#698b69', 'DarkSlateBlue': '#483d8b', 'DarkSlateGray': '#2f4f4f', 'DarkSlateGray1': '#97ffff', 'DarkSlateGray2': '#8deeee', 'DarkSlateGray3': '#79cdcd', 'DarkSlateGray4': '#528b8b', 'DarkSlateGrey': '#2f4f4f', 'DarkTurquoise': '#00ced1', 'DarkViolet': '#9400d3', 'DeepPink': '#ff1493', 'DeepPink1': '#ff1493', 'DeepPink2': '#ee1289', 'DeepPink3': '#cd1076', 'DeepPink4': '#8b0a50', 'DeepSkyBlue': '#00bfff', 'DeepSkyBlue1': '#00bfff', 'DeepSkyBlue2': '#00b2ee', 'DeepSkyBlue3': '#009acd', 'DeepSkyBlue4': '#00688b', 'DimGray': '#696969', 'DimGrey': '#696969', 'DodgerBlue': '#1e90ff', 'DodgerBlue1': '#1e90ff', 'DodgerBlue2': '#1c86ee', 'DodgerBlue3': '#1874cd', 'DodgerBlue4': '#104e8b', 'FloralWhite': '#fffaf0', 'ForestGreen': '#228b22', 'GhostWhite': '#f8f8ff', 'GreenYellow': '#adff2f', 'HotPink': '#ff69b4', 'HotPink1': '#ff6eb4', 'HotPink2': '#ee6aa7', 'HotPink3': '#cd6090', 'HotPink4': '#8b3a62', 'IndianRed': '#cd5c5c', 'IndianRed1': '#ff6a6a', 'IndianRed2': '#ee6363', 'IndianRed3': '#cd5555', 'IndianRed4': '#8b3a3a', 'LavenderBlush': '#fff0f5', 'LavenderBlush1': '#fff0f5', 'LavenderBlush2': '#eee0e5', 'LavenderBlush3': '#cdc1c5', 'LavenderBlush4': '#8b8386', 'LawnGreen': '#7cfc00', 'LemonChiffon': '#fffacd', 'LemonChiffon1': '#fffacd', 'LemonChiffon2': '#eee9bf', 'LemonChiffon3': '#cdc9a5', 'LemonChiffon4': '#8b8970', 'LightBlue': '#add8e6', 'LightBlue1': '#bfefff', 'LightBlue2': '#b2dfee', 'LightBlue3': '#9ac0cd', 'LightBlue4': '#68838b', 'LightCoral': '#f08080', 'LightCyan': '#e0ffff', 'LightCyan1': '#e0ffff', 'LightCyan2': '#d1eeee', 'LightCyan3': '#b4cdcd', 'LightCyan4': '#7a8b8b', 'LightGoldenrod': '#eedd82', 'LightGoldenrod1': '#ffec8b', 'LightGoldenrod2': '#eedc82', 'LightGoldenrod3': '#cdbe70', 'LightGoldenrod4': '#8b814c', 'LightGoldenrodYellow': '#fafad2', 'LightGray': '#d3d3d3', 'LightGreen': '#90ee90', 'LightGrey': '#d3d3d3', 'LightPink': '#ffb6c1', 'LightPink1': '#ffaeb9', 'LightPink2': '#eea2ad', 'LightPink3': '#cd8c95', 'LightPink4': '#8b5f65', 'LightSalmon': '#ffa07a', 'LightSalmon1': '#ffa07a', 'LightSalmon2': '#ee9572', 'LightSalmon3': '#cd8162', 'LightSalmon4': '#8b5742', 'LightSeaGreen': '#20b2aa', 'LightSkyBlue': '#87cefa', 'LightSkyBlue1': '#b0e2ff', 'LightSkyBlue2': '#a4d3ee', 'LightSkyBlue3': '#8db6cd', 'LightSkyBlue4': '#607b8b', 'LightSlateBlue': '#8470ff', 'LightSlateGray': '#778899', 'LightSlateGrey': '#778899', 'LightSteelBlue': '#b0c4de', 'LightSteelBlue1': '#cae1ff', 'LightSteelBlue2': '#bcd2ee', 'LightSteelBlue3': '#a2b5cd', 'LightSteelBlue4': '#6e7b8b', 'LightYellow': '#ffffe0', 'LightYellow1': '#ffffe0', 'LightYellow2': '#eeeed1', 'LightYellow3': '#cdcdb4', 'LightYellow4': '#8b8b7a', 'LimeGreen': '#32cd32', 'MediumAquamarine': '#66cdaa', 'MediumBlue': '#0000cd', 'MediumOrchid': '#ba55d3', 'MediumOrchid1': '#e066ff', 'MediumOrchid2': '#d15fee', 'MediumOrchid3': '#b452cd', 'MediumOrchid4': '#7a378b', 'MediumPurple': '#9370db', 'MediumPurple1': '#ab82ff', 'MediumPurple2': '#9f79ee', 'MediumPurple3': '#8968cd', 'MediumPurple4': '#5d478b', 'MediumSeaGreen': '#3cb371', 'MediumSlateBlue': '#7b68ee', 'MediumSpringGreen': '#00fa9a', 'MediumTurquoise': '#48d1cc', 'MediumVioletRed': '#c71585', 'MidnightBlue': '#191970', 'MintCream': '#f5fffa', 'MistyRose': '#ffe4e1', 'MistyRose1': '#ffe4e1', 'MistyRose2': '#eed5d2', 'MistyRose3': '#cdb7b5', 'MistyRose4': '#8b7d7b', 'NavajoWhite': '#ffdead', 'NavajoWhite1': '#ffdead', 'NavajoWhite2': '#eecfa1', 'NavajoWhite3': '#cdb38b', 'NavajoWhite4': '#8b795e', 'NavyBlue': '#000080', 'OldLace': '#fdf5e6', 'OliveDrab': '#6b8e23', 'OliveDrab1': '#c0ff3e', 'OliveDrab2': '#b3ee3a', 'OliveDrab3': '#9acd32', 'OliveDrab4': '#698b22', 'OrangeRed': '#ff4500', 'OrangeRed1': '#ff4500', 'OrangeRed2': '#ee4000', 'OrangeRed3': '#cd3700', 'OrangeRed4': '#8b2500', 'PaleGoldenrod': '#eee8aa', 'PaleGreen': '#98fb98', 'PaleGreen1': '#9aff9a', 'PaleGreen2': '#90ee90', 'PaleGreen3': '#7ccd7c', 'PaleGreen4': '#548b54', 'PaleTurquoise': '#afeeee', 'PaleTurquoise1': '#bbffff', 'PaleTurquoise2': '#aeeeee', 'PaleTurquoise3': '#96cdcd', 'PaleTurquoise4': '#668b8b', 'PaleVioletRed': '#db7093', 'PaleVioletRed1': '#ff82ab', 'PaleVioletRed2': '#ee799f', 'PaleVioletRed3': '#cd6889', 'PaleVioletRed4': '#8b475d', 'PapayaWhip': '#ffefd5', 'Pcolor1': '#352a87', 'Pcolor2': '#0363e1', 'Pcolor3': '#1485d4', 'Pcolor4': '#06a7c6', 'Pcolor5': '#38b99e', 'Pcolor6': '#92bf73', 'Pcolor7': '#d9ba56', 'Pcolor8': '#fcce2e', 'Pcolor9': '#f9fb0e', 'PeachPuff': '#ffdab9', 'PeachPuff1': '#ffdab9', 'PeachPuff2': '#eecbad', 'PeachPuff3': '#cdaf95', 'PeachPuff4': '#8b7765', 'PowderBlue': '#b0e0e6', 'RosyBrown': '#bc8f8f', 'RosyBrown1': '#ffc1c1', 'RosyBrown2': '#eeb4b4', 'RosyBrown3': '#cd9b9b', 'RosyBrown4': '#8b6969', 'RoyalBlue': '#4169e1', 'RoyalBlue1': '#4876ff', 'RoyalBlue2': '#436eee', 'RoyalBlue3': '#3a5fcd', 'RoyalBlue4': '#27408b', 'SaddleBrown': '#8b4513', 'SandyBrown': '#f4a460', 'SeaGreen': '#2e8b57', 'SeaGreen1': '#54ff9f', 'SeaGreen2': '#4eee94', 'SeaGreen3': '#43cd80', 'SeaGreen4': '#2e8b57', 'SkyBlue': '#87ceeb', 'SkyBlue1': '#87ceff', 'SkyBlue2': '#7ec0ee', 'SkyBlue3': '#6ca6cd', 'SkyBlue4': '#4a708b', 'SlateBlue': '#6a5acd', 'SlateBlue1': '#836fff', 'SlateBlue2': '#7a67ee', 'SlateBlue3': '#6959cd', 'SlateBlue4': '#473c8b', 'SlateGray': '#708090', 'SlateGray1': '#c6e2ff', 'SlateGray2': '#b9d3ee', 'SlateGray3': '#9fb6cd', 'SlateGray4': '#6c7b8b', 'SlateGrey': '#708090', 'SpringGreen': '#00ff7f', 'SpringGreen1': '#00ff7f', 'SpringGreen2': '#00ee76', 'SpringGreen3': '#00cd66', 'SpringGreen4': '#008b45', 'SteelBlue': '#4682b4', 'SteelBlue1': '#63b8ff', 'SteelBlue2': '#5cacee', 'SteelBlue3': '#4f94cd', 'SteelBlue4': '#36648b', 'VioletRed': '#d02090', 'VioletRed1': '#ff3e96', 'VioletRed2': '#ee3a8c', 'VioletRed3': '#cd3278', 'VioletRed4': '#8b2252', 'WhiteSmoke': '#f5f5f5', 'YellowGreen': '#9acd32', 'antique white': '#faebd7', 'aquamarine': '#7fffd4', 'aquamarine1': '#7fffd4', 'aquamarine2': '#76eec6', 'aquamarine3': '#66cdaa', 'aquamarine4': '#458b74', 'azure': '#f0ffff', 'azure1': '#f0ffff', 'azure2': '#e0eeee', 'azure3': '#c1cdcd', 'azure4': '#838b8b', 'beige': '#f5f5dc', 'bisque': '#ffe4c4', 'bisque1': '#ffe4c4', 'bisque2': '#eed5b7', 'bisque3': '#cdb79e', 'bisque4': '#8b7d6b', 'black': '#000000', 'blanched almond': '#ffebcd', 'blue': '#0000ff', 'blue violet': '#8a2be2', 'blue1': '#0000ff', 'blue2': '#0000ee', 'blue3': '#0000cd', 'blue4': '#00008b', 'brown': '#a52a2a', 'brown1': '#ff4040', 'brown2': '#ee3b3b', 'brown3': '#cd3333', 'brown4': '#8b2323', 'burlywood': '#deb887', 'burlywood1': '#ffd39b', 'burlywood2': '#eec591', 'burlywood3': '#cdaa7d', 'burlywood4': '#8b7355', 'cadet blue': '#5f9ea0', 'chartreuse': '#7fff00', 'chartreuse1': '#7fff00', 'chartreuse2': '#76ee00', 'chartreuse3': '#66cd00', 'chartreuse4': '#458b00', 'chocolate': '#d2691e', 'chocolate1': '#ff7f24', 'chocolate2': '#ee7621', 'chocolate3': '#cd661d', 'chocolate4': '#8b4513', 'coral': '#ff7f50', 'coral1': '#ff7256', 'coral2': '#ee6a50', 'coral3': '#cd5b45', 'coral4': '#8b3e2f', 'cornflowerblue': '#6495ed', 'cornsilk': '#fff8dc', 'cornsilk1': '#fff8dc', 'cornsilk2': '#eee8cd', 'cornsilk3': '#cdc8b1', 'cornsilk4': '#8b8878', 'crimson': '#dc143c', 'cyan': '#00ffff', 'cyan1': '#00ffff', 'cyan2': '#00eeee', 'cyan3': '#00cdcd', 'cyan4': '#008b8b', 'dark blue': '#00008b', 'dark cyan': '#008b8b', 'dark goldenrod': '#b8860b', 'dark gray': '#a9a9a9', 'dark green': '#006400', 'dark grey': '#a9a9a9', 'dark khaki': '#bdb76b', 'dark magenta': '#8b008b', 'dark olive green': '#556b2f', 'dark orange': '#ff8c00', 'dark orchid': '#9932cc', 'dark red': '#8b0000', 'dark salmon': '#e9967a', 'dark sea green': '#8fbc8f', 'dark turquoise': '#00ced1', 'dark violet': '#9400d3', 'dark_blue': '#000080', 'dark_green': '#006400', 'dark_magenta': '#590059', 'dark_red': '#960000', 'darkslateblue': '#483d8b', 'deep pink': '#ff1493', 'deep sky blue': '#00bfff', 'dodger blue': '#1e90ff', 'firebrick': '#b22222', 'firebrick1': '#ff3030', 'firebrick2': '#ee2c2c', 'firebrick3': '#cd2626', 'firebrick4': '#8b1a1a', 'floral white': '#fffaf0', 'forest green': '#228b22', 'gainsboro': '#dcdcdc', 'ghost white': '#f8f8ff', 'gold': '#ffd700', 'gold1': '#ffd700', 'gold2': '#eec900', 'gold3': '#cdad00', 'gold4': '#8b7500', 'goldenrod': '#daa520', 'goldenrod1': '#ffc125', 'goldenrod2': '#eeb422', 'goldenrod3': '#cd9b1d', 'goldenrod4': '#8b6914', 'gray': '#bebebe', 'gray0': '#000000', 'gray1': '#030303', 'gray10': '#1a1a1a', 'gray100': '#ffffff', 'gray11': '#1c1c1c', 'gray12': '#1f1f1f', 'gray13': '#212121', 'gray14': '#242424', 'gray15': '#262626', 'gray16': '#292929', 'gray17': '#2b2b2b', 'gray18': '#2e2e2e', 'gray19': '#303030', 'gray2': '#050505', 'gray20': '#333333', 'gray21': '#363636', 'gray22': '#383838', 'gray23': '#3b3b3b', 'gray24': '#3d3d3d', 'gray25': '#404040', 'gray26': '#424242', 'gray27': '#454545', 'gray28': '#474747', 'gray29': '#4a4a4a', 'gray3': '#080808', 'gray30': '#4d4d4d', 'gray31': '#4f4f4f', 'gray32': '#525252', 'gray33': '#545454', 'gray34': '#575757', 'gray35': '#595959', 'gray36': '#5c5c5c', 'gray37': '#5e5e5e', 'gray38': '#616161', 'gray39': '#636363', 'gray4': '#0a0a0a', 'gray40': '#666666', 'gray41': '#696969', 'gray42': '#6b6b6b', 'gray43': '#6e6e6e', 'gray44': '#707070', 'gray45': '#737373', 'gray46': '#757575', 'gray47': '#787878', 'gray48': '#7a7a7a', 'gray49': '#7d7d7d', 'gray5': '#0d0d0d', 'gray50': '#7f7f7f', 'gray51': '#828282', 'gray52': '#858585', 'gray53': '#878787', 'gray54': '#8a8a8a', 'gray55': '#8c8c8c', 'gray56': '#8f8f8f', 'gray57': '#919191', 'gray58': '#949494', 'gray59': '#969696', 'gray6': '#0f0f0f', 'gray60': '#999999', 'gray61': '#9c9c9c', 'gray62': '#9e9e9e', 'gray63': '#a1a1a1', 'gray64': '#a3a3a3', 'gray65': '#a6a6a6', 'gray66': '#a8a8a8', 'gray67': '#ababab', 'gray68': '#adadad', 'gray69': '#b0b0b0', 'gray7': '#121212', 'gray70': '#b3b3b3', 'gray71': '#b5b5b5', 'gray72': '#b8b8b8', 'gray73': '#bababa', 'gray74': '#bdbdbd', 'gray75': '#bfbfbf', 'gray76': '#c2c2c2', 'gray77': '#c4c4c4', 'gray78': '#c7c7c7', 'gray79': '#c9c9c9', 'gray8': '#141414', 'gray80': '#cccccc', 'gray81': '#cfcfcf', 'gray82': '#d1d1d1', 'gray83': '#d4d4d4', 'gray84': '#d6d6d6', 'gray85': '#d9d9d9', 'gray86': '#dbdbdb', 'gray87': '#dedede', 'gray88': '#e0e0e0', 'gray89': '#e3e3e3', 'gray9': '#171717', 'gray90': '#e5e5e5', 'gray91': '#e8e8e8', 'gray92': '#ebebeb', 'gray93': '#ededed', 'gray94': '#f0f0f0', 'gray95': '#f2f2f2', 'gray96': '#f5f5f5', 'gray97': '#f7f7f7', 'gray98': '#fafafa', 'gray99': '#fcfcfc', 'green': '#00ff00', 'green yellow': '#adff2f', 'green1': '#00ff00', 'green2': '#00ee00', 'green3': '#00cd00', 'green4': '#008b00', 'grey': '#bebebe', 'grey0': '#000000', 'grey1': '#030303', 'grey10': '#1a1a1a', 'grey100': '#ffffff', 'grey11': '#1c1c1c', 'grey12': '#1f1f1f', 'grey13': '#212121', 'grey14': '#242424', 'grey15': '#262626', 'grey16': '#292929', 'grey17': '#2b2b2b', 'grey18': '#2e2e2e', 'grey19': '#303030', 'grey2': '#050505', 'grey20': '#333333', 'grey21': '#363636', 'grey22': '#383838', 'grey23': '#3b3b3b', 'grey24': '#3d3d3d', 'grey25': '#404040', 'grey26': '#424242', 'grey27': '#454545', 'grey28': '#474747', 'grey29': '#4a4a4a', 'grey3': '#080808', 'grey30': '#4d4d4d', 'grey31': '#4f4f4f', 'grey32': '#525252', 'grey33': '#545454', 'grey34': '#575757', 'grey35': '#595959', 'grey36': '#5c5c5c', 'grey37': '#5e5e5e', 'grey38': '#616161', 'grey39': '#636363', 'grey4': '#0a0a0a', 'grey40': '#666666', 'grey41': '#696969', 'grey42': '#6b6b6b', 'grey43': '#6e6e6e', 'grey44': '#707070', 'grey45': '#737373', 'grey46': '#757575', 'grey47': '#787878', 'grey48': '#7a7a7a', 'grey49': '#7d7d7d', 'grey5': '#0d0d0d', 'grey50': '#7f7f7f', 'grey51': '#828282', 'grey52': '#858585', 'grey53': '#878787', 'grey54': '#8a8a8a', 'grey55': '#8c8c8c', 'grey56': '#8f8f8f', 'grey57': '#919191', 'grey58': '#949494', 'grey59': '#969696', 'grey6': '#0f0f0f', 'grey60': '#999999', 'grey61': '#9c9c9c', 'grey62': '#9e9e9e', 'grey63': '#a1a1a1', 'grey64': '#a3a3a3', 'grey65': '#a6a6a6', 'grey66': '#a8a8a8', 'grey67': '#ababab', 'grey68': '#adadad', 'grey69': '#b0b0b0', 'grey7': '#121212', 'grey70': '#b3b3b3', 'grey71': '#b5b5b5', 'grey72': '#b8b8b8', 'grey73': '#bababa', 'grey74': '#bdbdbd', 'grey75': '#bfbfbf', 'grey76': '#c2c2c2', 'grey77': '#c4c4c4', 'grey78': '#c7c7c7', 'grey79': '#c9c9c9', 'grey8': '#141414', 'grey80': '#cccccc', 'grey81': '#cfcfcf', 'grey82': '#d1d1d1', 'grey83': '#d4d4d4', 'grey84': '#d6d6d6', 'grey85': '#d9d9d9', 'grey86': '#dbdbdb', 'grey87': '#dedede', 'grey88': '#e0e0e0', 'grey89': '#e3e3e3', 'grey9': '#171717', 'grey90': '#e5e5e5', 'grey91': '#e8e8e8', 'grey92': '#ebebeb', 'grey93': '#ededed', 'grey94': '#f0f0f0', 'grey95': '#f2f2f2', 'grey96': '#f5f5f5', 'grey97': '#f7f7f7', 'grey98': '#fafafa', 'grey99': '#fcfcfc', 'honeydew': '#f0fff0', 'honeydew1': '#f0fff0', 'honeydew2': '#e0eee0', 'honeydew3': '#c1cdc1', 'honeydew4': '#838b83', 'hot pink': '#ff69b4', 'indian red': '#cd5c5c', 'ivory': '#fffff0', 'ivory1': '#fffff0', 'ivory2': '#eeeee0', 'ivory3': '#cdcdc1', 'ivory4': '#8b8b83', 'khaki': '#f0e68c', 'khaki1': '#fff68f', 'khaki2': '#eee685', 'khaki3': '#cdc673', 'khaki4': '#8b864e', 'lavender': '#e6e6fa', 'lawn green': '#7cfc00', 'light blue': '#add8e6', 'light coral': '#f08080', 'light cyan': '#e0ffff', 'light goldenrod': '#eedd82', 'light goldenrod yellow': '#fafad2', 'light green': '#90ee90', 'light pink': '#ffb6c1', 'light salmon': '#ffa07a', 'light sea green': '#20b2aa', 'light sky blue': '#87cefa', 'light slate blue': '#8470ff', 'light steel blue': '#b0c4de', 'light yellow': '#ffffe0', 'light_blue': '#00dcff', 'light_green': '#00ff00', 'light_magenta': '#ff00ff', 'light_red': '#ff6d00', 'lightgray': '#d3d3d3', 'lightgrey': '#d3d3d3', 'lightslategray': '#778899', 'lightslategrey': '#778899', 'lime green': '#32cd32', 'linen': '#faf0e6', 'magenta': '#ff00ff', 'magenta1': '#ff00ff', 'magenta2': '#ee00ee', 'magenta3': '#cd00cd', 'magenta4': '#8b008b', 'maroon': '#b03060', 'maroon1': '#ff34b3', 'maroon2': '#ee30a7', 'maroon3': '#cd2990', 'maroon4': '#8b1c62', 'medium aquamarine': '#66cdaa', 'medium blue': '#0000cd', 'medium orchid': '#ba55d3', 'medium purple': '#9370db', 'medium sea green': '#3cb371', 'medium spring green': '#00fa9a', 'medium turquoise': '#48d1cc', 'medium violet red': '#c71585', 'mediumslateblue': '#7b68ee', 'midnightblue': '#191970', 'moccasin': '#ffe4b5', 'navajo white': '#ffdead', 'navy': '#000080', 'navyblue': '#000080', 'old lace': '#fdf5e6', 'olive drab': '#6b8e23', 'orange': '#ffa500', 'orange red': '#ff4500', 'orange1': '#ffa500', 'orange2': '#ee9a00', 'orange3': '#cd8500', 'orange4': '#8b5a00', 'orchid': '#da70d6', 'orchid1': '#ff83fa', 'orchid2': '#ee7ae9', 'orchid3': '#cd69c9', 'orchid4': '#8b4789', 'pale goldenrod': '#eee8aa', 'pale green': '#98fb98', 'pale turquoise': '#afeeee', 'pale violet red': '#db7093', 'papaya whip': '#ffefd5', 'peach puff': '#ffdab9', 'peru': '#cd853f', 'pink': '#ffc0cb', 'pink1': '#ffb5c5', 'pink2': '#eea9b8', 'pink3': '#cd919e', 'pink4': '#8b636c', 'plum': '#dda0dd', 'plum1': '#ffbbff', 'plum2': '#eeaeee', 'plum3': '#cd96cd', 'plum4': '#8b668b', 'powder blue': '#b0e0e6', 'purple': '#a020f0', 'purple1': '#9b30ff', 'purple2': '#912cee', 'purple3': '#7d26cd', 'purple4': '#551a8b', 'red': '#ff0000', 'red1': '#ff0000', 'red2': '#ee0000', 'red3': '#cd0000', 'red4': '#8b0000', 'rosy brown': '#bc8f8f', 'royal blue': '#4169e1', 'saddle brown': '#8b4513', 'salmon': '#fa8072', 'salmon1': '#ff8c69', 'salmon2': '#ee8262', 'salmon3': '#cd7054', 'salmon4': '#8b4c39', 'sandy brown': '#f4a460', 'sea green': '#2e8b57', 'seashell': '#fff5ee', 'seashell1': '#fff5ee', 'seashell2': '#eee5de', 'seashell3': '#cdc5bf', 'seashell4': '#8b8682', 'sienna': '#a0522d', 'sienna1': '#ff8247', 'sienna2': '#ee7942', 'sienna3': '#cd6839', 'sienna4': '#8b4726', 'sky blue': '#87ceeb', 'slateblue': '#6a5acd', 'slategray': '#708090', 'slategrey': '#708090', 'snow': '#fffafa', 'snow1': '#fffafa', 'snow2': '#eee9e9', 'snow3': '#cdc9c9', 'snow4': '#8b8989', 'spring green': '#00ff7f', 'steel blue': '#4682b4', 'tan': '#d2b48c', 'tan1': '#ffa54f', 'tan2': '#ee9a49', 'tan3': '#cd853f', 'tan4': '#8b5a2b', 'thistle': '#d8bfd8', 'thistle1': '#ffe1ff', 'thistle2': '#eed2ee', 'thistle3': '#cdb5cd', 'thistle4': '#8b7b8b', 'tomato': '#ff6347', 'tomato1': '#ff6347', 'tomato2': '#ee5c42', 'tomato3': '#cd4f39', 'tomato4': '#8b3626', 'turquoise': '#40e0d0', 'turquoise1': '#00f5ff', 'turquoise2': '#00e5ee', 'turquoise3': '#00c5cd', 'turquoise4': '#00868b', 'violet': '#ee82ee', 'violet red': '#d02090', 'wheat': '#f5deb3', 'wheat1': '#ffe7ba', 'wheat2': '#eed8ae', 'wheat3': '#cdba96', 'wheat4': '#8b7e66', 'white': '#ffffff', 'white smoke': '#f5f5f5', 'yellow': '#ffff00', 'yellow green': '#9acd32', 'yellow1': '#ffff00', 'yellow2': '#eeee00', 'yellow3': '#cdcd00', 'yellow4': '#8b8b00'}
+
+
+def expression(spec):
+    if re.fullmatch(r'[1-9]\d*', spec):
+        index = int(spec) - 1
+        return lambda row: row[index]
+    spec = spec.replace('^', '**')
+    translated = re.sub(r'\$(\d+)', lambda m: f'col({int(m[1])})', spec)
+    try:
+        tree = ast.parse(translated, mode='eval')
+    except SyntaxError as exc:
+        raise PlotError(f'invalid column expression {spec!r}') from exc
+    allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name,
+               ast.Load, ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div,
+               ast.Pow, ast.Mod, ast.UAdd, ast.USub, ast.FloorDiv)
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed):
+            raise PlotError(f'unsupported operation in {spec!r}')
+        if isinstance(node, ast.Name) and node.id not in set(FUNCS) | set(CONSTANTS) | {'col'}:
+            raise PlotError(f'unknown function or name {node.id!r}')
+        if isinstance(node, ast.Call) and (not isinstance(node.func, ast.Name)
+                                           or node.func.id not in set(FUNCS) | {'col'}
+                                           or node.keywords):
+            raise PlotError(f'unsupported function call in {spec!r}')
+        if isinstance(node, ast.Constant) and type(node.value) not in (int, float):
+            raise PlotError(f'non-numeric constant in {spec!r}')
+    code = compile(tree, '<column expression>', 'eval')
+    def evaluate(row):
+        def col(n):
+            if type(n) is not int or n < 1:
+                raise ValueError('column numbers must be positive integers')
+            return row[n - 1]
+        return float(eval(code, {'__builtins__': {}}, {**FUNCS, **CONSTANTS, 'col': col}))
+    return evaluate
+
+
+def split_specs(value):
+    parts, start, depth = [], 0, 0
+    for i, char in enumerate(value):
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+        elif char == ',' and depth == 0:
+            parts.append(value[start:i])
+            start = i + 1
+        if depth < 0:
+            raise PlotError('unbalanced parentheses in -u')
+    if depth:
+        raise PlotError('unbalanced parentheses in -u')
+    return parts + [value[start:]]
+
+
+def numeric_pair(text, option):
+    try:
+        lo, hi = (float(s) for s in text.split(':'))
+    except (ValueError, TypeError):
+        raise PlotError(f'{option} requires MIN:MAX') from None
+    if not math.isfinite(lo) or not math.isfinite(hi) or lo >= hi:
+        raise PlotError(f'{option} requires finite MIN < MAX')
+    return lo, hi
+
+
+def initial_state():
+    return dict(using=['1:2'], all=False, stype='xy', style='l', symbol=None,
+                linewidth=2.0, pointsize=1.0, shift=None, legend_label=None, explicit_using=False)
+
+
+def parse(argv):
+    state = initial_state()
+    opts = dict(x=None, y=None, lx=False, ly=False, title='', xt='', yt='',
+                legend=None, dirs=None, size=(1024, 768), save=None, show=False,
+                gui=True, palette=None, kind='xy', cmap='viridis', clim=None, clog=False,
+                extent=None, aspect='auto', z=None, zt='', lz=False, cbt='',
+                export=None, link=False, grid=True)
+    files = []
+    positional = False
+    args = iter(argv)
+    for arg in args:
+        if positional:
+            files.append((arg, copy.deepcopy(state)))
+            continue
+        if arg == '--':
+            positional = True
+            continue
+        if arg in ('-h', '--help'):
+            print(HELP)
+            raise SystemExit(0)
+        if arg == '-clist':
+            colors = color_names()
+            print('\n'.join(sorted(colors)))
+            raise SystemExit(0)
+        key, sep, inline = arg.partition('=')
+        if key in ('--type', '--cmap', '--clim', '--extent', '--aspect', '--export', '--cb-label', '--zt', '--z'):
+            value = inline if sep else next(args, None)
+            if value is None:
+                raise PlotError(f'{key} requires a value')
+            name = {'--type':'kind', '--cb-label':'cbt', '--zt':'zt', '--z':'z'}.get(key, key[2:])
+            if key in ('--clim', '--z'):
+                value = numeric_pair(value, key)
+            elif key == '--extent':
+                try:
+                    value = tuple(float(v) for v in value.split(':'))
+                except ValueError:
+                    raise PlotError('--extent requires XMIN:XMAX:YMIN:YMAX') from None
+                if len(value) != 4 or not all(math.isfinite(v) for v in value) or value[0] >= value[1] or value[2] >= value[3]:
+                    raise PlotError('--extent requires finite increasing bounds')
+            elif key == '--type' and value not in ('xy','image','intensity','scatter-color','line3d','scatter3d','surface'):
+                raise PlotError('unknown plot type ' + value)
+            elif key == '--aspect' and value not in ('auto','equal'):
+                raise PlotError('--aspect must be auto or equal')
+            opts[name] = value
+            continue
+        if arg in ('--clog', '--link-data', '--lz'):
+            opts[{'--clog':'clog','--link-data':'link','--lz':'lz'}[arg]] = True
+            continue
+        if arg == '--no-gui':
+            opts['gui'] = False
+        elif arg == '--no-grid':
+            opts['grid'] = False
+        elif arg == '-show':
+            opts['show'] = True
+        elif arg.startswith('-L'):
+            if not arg[2:]:
+                raise PlotError('-L needs a legend label')
+            state['legend_label'] = arg[2:]
+            opts['legend'] = 'file'
+        elif arg in ('-lx', '-ly'):
+            opts[arg[1:]] = True
+        elif arg == '-l':
+            opts['legend'] = 'file'
+        elif arg.startswith('-d'):
+            suffix = arg[2:]
+            if suffix and not suffix.isdigit():
+                raise PlotError('-d accepts an optional positive integer')
+            opts['legend'] = 'directory'
+            opts['dirs'] = int(suffix) if suffix else None
+        elif arg.startswith('-st'):
+            value = arg[3:]
+            if value not in ('xy', 'xydx', 'xydy', 'xydxdy'):
+                raise PlotError('-st must be xy, xydx, xydy or xydxdy')
+            state['stype'] = value
+            state['explicit_using'] = False
+            state['using'] = None
+            state['all'] = False
+        elif arg.startswith('-lw') or arg.startswith('-ps'):
+            key = 'linewidth' if arg.startswith('-lw') else 'pointsize'
+            try:
+                state[key] = float(arg[3:])
+            except ValueError:
+                raise PlotError(f'{arg[:3]} needs a number') from None
+            if not math.isfinite(state[key]) or state[key] < 0:
+                raise PlotError(f'{arg[:3]} needs a nonnegative finite number')
+        elif arg.startswith('-xt') or arg.startswith('-yt'):
+            opts[arg[1:3]] = arg[3:]
+        elif arg.startswith('-x') or arg.startswith('-y'):
+            opts[arg[1]] = numeric_pair(arg[2:], arg[:2])
+        elif arg.startswith('-t'):
+            opts['title'] = arg[2:]
+        elif arg.startswith('-u'):
+            value = arg[2:]
+            state['explicit_using'] = True
+            state['all'] = value == 'all'
+            if value in ('one', '1'):
+                state['using'] = None
+            elif value == 'all':
+                state['using'] = None
+            else:
+                state['using'] = split_specs(value)
+                if not all(state['using']):
+                    raise PlotError('-u needs nonempty column specifications')
+        elif arg.startswith('-w'):
+            m = re.fullmatch(r'(l|p|lp)(?::(\d+))?', arg[2:])
+            if not m:
+                raise PlotError('-w must be l, p, or lp, optionally :N')
+            state['style'] = m[1]
+            state['symbol'] = int(m[2]) if m[2] else None
+        elif arg.startswith('-k'):
+            try:
+                state['shift'] = float(arg[2:])
+            except ValueError:
+                raise PlotError('-k needs a numeric shift') from None
+            if not math.isfinite(state['shift']):
+                raise PlotError('-k needs a finite shift')
+        elif arg.startswith('-c'):
+            opts['palette'] = arg[2:] or 'default'
+        elif arg.startswith('-m'):
+            value = arg[2:]
+            if value:
+                opts['size'] = page_size(value)
+            else:
+                opts['size'] = (1024, 768)
+        elif arg.startswith('-s'):
+            value = arg[2:]
+            if not value:
+                raise PlotError('-s needs a filename')
+            opts['save'] = str(Path(value).with_suffix('.py'))
+        elif arg == '-':
+            files.append((arg, copy.deepcopy(state)))
+        elif arg.startswith('-') and not Path(arg).is_file():
+            raise PlotError(f'unknown option {arg!r}')
+        else:
+            files.append((arg, copy.deepcopy(state)))
+    return opts, files, state
+
+
+def page_size(value):
+    try:
+        w, h = (int(v) for v in value.split(':'))
+    except ValueError:
+        raise PlotError('-m needs WIDTH:HEIGHT in pixels') from None
+    if w <= 0 or h <= 0:
+        raise PlotError('-m dimensions must be positive')
+    return w, h
+
+
+def read_blocks(path):
+    if path == '-':
+        stream = sys.stdin
+        close = False
+    elif path.endswith('.gz'):
+        stream = gzip.open(path, 'rt', encoding='utf-8')
+        close = True
+    else:
+        stream = open(path, encoding='utf-8')
+        close = True
+    blocks, block = [], []
+    try:
+        for line_no, line in enumerate(stream, 1):
+            stripped = line.strip()
+            if not stripped or stripped == '&':
+                if block:
+                    blocks.append(block)
+                    block = []
+                continue
+            if stripped.startswith('#') or stripped.startswith('@'):
+                continue
+            try:
+                row = [float(v.replace('D', 'E').replace('d', 'e')) for v in stripped.split('#', 1)[0].split()]
+            except ValueError:
+                raise PlotError(f'{path}:{line_no}: expected numeric columns') from None
+            block.append(row)
+        if block:
+            blocks.append(block)
+    finally:
+        if close:
+            stream.close()
+    return blocks
+
+
+def palette_colors(value, n):
+    if value is None:
+        return [DEFAULT_SERIES_COLORS[i % len(DEFAULT_SERIES_COLORS)] for i in range(n)]
+    colors = color_names()
+    stops = PALETTES.get(value, value.split(':'))
+    rgb = []
+    for stop in stops:
+        color = stop if re.fullmatch(r'#[0-9a-fA-F]{6}', stop) else colors.get(stop)
+        if color is None:
+            raise PlotError(f'unknown color {stop!r}; use -clist')
+        rgb.append(tuple(bytes.fromhex(color[1:])))
+    if len(rgb) == 1:
+        rgb *= 2
+    output = []
+    for i in range(n):
+        t = 0 if n == 1 else i * (len(rgb) - 1) / (n - 1)
+        j = min(int(t), len(rgb) - 2)
+        fraction = t - j
+        color = tuple(round(a + fraction * (b - a)) for a, b in zip(rgb[j], rgb[j + 1]))
+        output.append('#%02x%02x%02x' % color)
+    return output
+
+
+
+def prepare_series(opts, files):
+    series = []
+    kind = opts['kind']
+    if kind != 'xy' and any(state['stype'] != 'xy' or state['all'] for _,state in files):
+        raise PlotError('-st error bars and -uall are only supported for XY plots')
+    if kind in ('image','intensity','surface') and len(files) != 1:
+        raise PlotError('image, intensity and surface require one input file')
+    for path, state in files:
+        blocks = read_blocks(path)
+        if kind in ('image','intensity','surface'):
+            blocks = [[row for block in blocks for row in block]]
+        for block_no, block in enumerate(blocks, 1):
+            if not block:
+                continue
+            if kind == 'image':
+                if state['explicit_using']:
+                    raise PlotError('image reads a matrix; do not specify -u')
+                if len({len(row) for row in block}) != 1:
+                    raise PlotError('image requires a rectangular matrix')
+                cols = block
+                if any(not math.isfinite(v) for row in block for v in row):
+                    raise PlotError('image contains non-finite values')
+                series.append(dict(path=path,block=1,blocks=1,spec='matrix',state=state,cols=cols))
+                continue
+            expected = (4 if state['stype']=='xydxdy' else 3 if state['stype']!='xy' else 2) if kind=='xy' else 3
+            using = state['using']
+            if state['all']:
+                if len(block[0]) < 2:
+                    raise PlotError('-uall requires at least two columns')
+                using = [f'1:{n}' for n in range(2,len(block[0])+1)]
+            elif using is None or (kind != 'xy' and not state['explicit_using']):
+                using = [':'.join(str(i) for i in range(1,expected+1))]
+                if kind=='xy' and expected==2 and len(block[0])==1:
+                    using=['index:$1']
+            for spec in using:
+                parts=spec.split(':')
+                if len(parts)!=expected:
+                    raise PlotError(f'{path}: {kind}/{state["stype"]} requires {expected} columns in {spec!r}')
+                funcs=[None if p=='index' else expression(p) for p in parts]
+                cols=[[] for _ in funcs]
+                for row_no,row in enumerate(block,1):
+                    try:
+                        values=[float(fn(row)) if fn else float(row_no-1) for fn in funcs]
+                    except (IndexError,ValueError,OverflowError,ZeroDivisionError,TypeError) as exc:
+                        raise PlotError(f'{path}, block {block_no}, row {row_no}: {exc}') from exc
+                    if any(not math.isfinite(v) for v in values):
+                        raise PlotError(f'{path}, block {block_no}, row {row_no}: non-finite value')
+                    if kind=='xy' and any(v<0 for v in values[2:]):
+                        raise PlotError(f'{path}: negative error bar')
+                    values[1] += (state['shift'] or 0)*len(series)
+                    if not math.isfinite(values[1]):
+                        raise PlotError(f'{path}: non-finite shifted value')
+                    for col,v in zip(cols,values):col.append(v)
+                series.append(dict(path=path,block=block_no,blocks=len(blocks),spec=spec,state=state,cols=cols))
+    if not series:
+        raise PlotError('no numeric data to plot')
+    if kind in ('intensity','surface') and len(series)!=1:
+        raise PlotError('intensity/surface require one x:y:z selection')
+    return series
+
+
+def rectangular_grid(cols):
+    import numpy as np
+    x,y,z=map(np.asarray,cols)
+    xs,ys=np.unique(x),np.unique(y)
+    if len(xs)<2 or len(ys)<2:
+        raise PlotError('grid requires at least two distinct x and y coordinates')
+    pairs=set(zip(x,y))
+    if len(pairs)!=len(x):
+        raise PlotError('duplicate (x,y) grid coordinates')
+    if len(x)!=len(xs)*len(ys):
+        raise PlotError('incomplete rectangular grid; use scatter-color for scattered data')
+    grid=np.empty((len(ys),len(xs)))
+    grid[np.searchsorted(ys,y),np.searchsorted(xs,x)]=z
+    return xs,ys,grid
+
+
+def build_figure(opts, series):
+    import numpy as np
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm, Normalize
+    kind=opts['kind']
+    is3d=kind in ('line3d','scatter3d','surface')
+    fig=plt.figure(figsize=(opts['size'][0]/100,opts['size'][1]/100),layout='constrained')
+    with plt.rc_context({'grid.color': '#eeeeee', 'grid.linewidth': 0.6}):
+        ax=fig.add_subplot(111,projection='3d' if is3d else None)
+    colors=palette_colors(opts['palette'],len(series))
+    markers=['o','s','D','^','v','+','x','*','p','h']
+    groups=[]
+    colorplots=kind in ('image','intensity','scatter-color','surface')
+    norm=None
+    if colorplots:
+        if opts['cmap'] not in mpl.colormaps:
+            raise PlotError('unknown colormap ' + opts['cmap'])
+        vals=np.concatenate([np.asarray(item['cols'] if kind=='image' else item['cols'][2]).ravel() for item in series])
+        if opts['clog'] and (np.any(vals<=0) or (opts['clim'] and opts['clim'][0]<=0)):
+            raise PlotError('logarithmic colors require positive values and limits')
+        low,high=opts['clim'] or (float(vals.min()),float(vals.max()))
+        if low==high:
+            low,high=(low/2,high*2) if opts['clog'] else (low-0.5,high+0.5)
+        norm=(LogNorm if opts['clog'] else Normalize)(vmin=low,vmax=high)
+    for i,item in enumerate(series):
+        state=item['state']
+        label=state['legend_label']
+        if label is None:
+            path=Path(item['path'])
+            label=str(path.parent) if opts['legend']=='directory' else path.name
+            if opts['legend']=='directory' and opts['dirs']:
+                label=str(Path(*path.parent.parts[:opts['dirs']]))
+            if item['blocks']>1:label+=f' set {item["block"]}'
+            label+=' '+item['spec']
+        cols=[np.asarray(c) for c in item['cols']]
+        if kind!='image':
+            for j,axis in enumerate(('x','y','z')[:3 if is3d else 2]):
+                if opts.get('l'+axis) and np.any(cols[j]<=0):
+                    raise PlotError(f'logarithmic {axis} axis requires positive coordinates')
+        symbol=state['symbol']
+        if symbol is not None and not 0<=symbol<=10:
+            raise PlotError('symbol number must be between 0 and 10')
+        marker=markers[(symbol-1 if symbol else i)%len(markers)] if state['style']!='l' and symbol!=0 else None
+        style=dict(color=colors[i],linewidth=state['linewidth'],marker=marker,
+                   markersize=3*state['pointsize'],linestyle='None' if state['style']=='p' else '-',label=label)
+        if kind=='xy':
+            x,y,*errors=cols
+            if errors:
+                xerr=errors[0] if state['stype'] in ('xydx','xydxdy') else None
+                yerr=errors[-1] if state['stype'] in ('xydy','xydxdy') else None
+                artist=ax.errorbar(x,y,xerr=xerr,yerr=yerr,**style)
+                members=[artist.lines[0],*artist.lines[1],*artist.lines[2]]
+                line=artist.lines[0]
+            else:
+                line,=ax.plot(x,y,**style);members=[line]
+            line.set_picker(5)
+            groups.append((line,members,label))
+        elif kind=='line3d':
+            line,=ax.plot(*cols,**style)
+            groups.append((line,[line],label))
+        elif kind=='scatter3d':
+            artist=ax.scatter(*cols,color=colors[i],s=(3*state['pointsize'])**2,label=label)
+            groups.append((artist,[artist],label))
+        elif kind=='scatter-color':
+            artist=ax.scatter(cols[0],cols[1],c=cols[2],cmap=opts['cmap'],norm=norm,s=(3*state['pointsize'])**2,picker=5)
+        elif kind=='image':
+            artist=ax.imshow(np.asarray(cols),origin='lower',extent=opts['extent'],aspect=opts['aspect'],interpolation='nearest',cmap=opts['cmap'],norm=norm)
+        else:
+            xs,ys,z=rectangular_grid(cols)
+            if kind=='intensity':
+                artist=ax.pcolormesh(xs,ys,z,shading='nearest',cmap=opts['cmap'],norm=norm)
+            else:
+                xx,yy=np.meshgrid(xs,ys)
+                artist=ax.plot_surface(xx,yy,z,rcount=len(ys),ccount=len(xs),cmap=opts['cmap'],norm=norm)
+    if colorplots:fig.colorbar(artist,ax=ax,label=opts['cbt'])
+    if is3d:
+        ax.grid(opts['grid'])
+    else:
+        ax.set_axisbelow(True)
+        if opts['grid']:
+            ax.grid(True, color='#eeeeee', linewidth=0.6)
+        else:
+            ax.grid(False)
+    ax.set_title(opts['title']);ax.set_xlabel(opts['xt']);ax.set_ylabel(opts['yt'])
+    if is3d:ax.set_zlabel(opts['zt'])
+    elif kind!='image':ax.set_aspect(opts['aspect'])
+    for axis in ('x','y','z') if is3d else ('x','y'):
+        if opts.get('l'+axis):
+            if opts.get(axis) and opts[axis][0]<=0:
+                raise PlotError(f'logarithmic {axis} limits must be positive')
+            getattr(ax,'set_'+axis+'scale')('log')
+        if opts.get(axis):getattr(ax,'set_'+axis+'lim')(*opts[axis])
+    if opts['legend'] and groups:
+        legend=ax.legend(handles=[g[0] for g in groups],labels=[g[2] for g in groups])
+        mapping={}
+        for proxy,(_,members,_) in zip(legend.legend_handles,groups):
+            proxy.set_picker(5);mapping[proxy]=members
+        def toggle(event):
+            if event.artist in mapping:
+                members=mapping[event.artist];visible=not members[0].get_visible()
+                for member in members:member.set_visible(visible)
+                event.artist.set_alpha(1 if visible else .2);fig.canvas.draw_idle()
+        fig.canvas.mpl_connect('pick_event',toggle)
+    if kind=='xy':
+        annotation=ax.annotate('',xy=(0,0),xytext=(12,12),textcoords='offset points',bbox=dict(boxstyle='round',fc='white',alpha=.9))
+        annotation.set_visible(False)
+        def inspect(event):
+            for line,_,label in groups:
+                if event.artist is line and len(event.ind):
+                    n=int(event.ind[0]);x,y=line.get_data();annotation.xy=(x[n],y[n])
+                    annotation.set_text(f'{label}\nindex={n}, x={x[n]:.8g}, y={y[n]:.8g}')
+                    annotation.set_visible(True);fig.canvas.draw_idle();break
+        fig.canvas.mpl_connect('pick_event',inspect)
+    return fig,ax
+
+
+def script_column(spec, data='data'):
+    """Translate a validated selection into readable, ordinary Python code."""
+    if spec == 'index':
+        return f'np.arange(len({data}), dtype=float)'
+    if re.fullmatch(r'[1-9]\d*', spec):
+        return f'{data}[:, {int(spec) - 1}]'
+    translated = re.sub(r'\$(\d+)', lambda match: f'col({int(match[1])})',
+                        spec.replace('^', '**'))
+    tree = ast.parse(translated, mode='eval')
+
+    class ColumnNames(ast.NodeTransformer):
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Name) and node.func.id == 'col':
+                index = self.visit(node.args[0])
+                offset = (ast.Constant(value=index.value - 1)
+                          if isinstance(index, ast.Constant) and type(index.value) is int
+                          else ast.BinOp(left=index, op=ast.Sub(), right=ast.Constant(value=1)))
+                return ast.Subscript(value=ast.Name(id='row', ctx=ast.Load()),
+                                     slice=offset, ctx=ast.Load())
+            return self.generic_visit(node)
+
+        def visit_Name(self, node):
+            if node.id in CONSTANTS or (node.id in FUNCS and node.id not in ('abs', 'min', 'max', 'pow')):
+                return ast.Attribute(value=ast.Name(id='math', ctx=ast.Load()),
+                                     attr=node.id, ctx=ast.Load())
+            return node
+
+    result = ast.unparse(ast.fix_missing_locations(ColumnNames().visit(tree)))
+    return f'np.array([{result} for row in {data}], dtype=float)'
+
+
+def make_script(opts, files, series):
+    """Write the actual plot, rather than serializing mplot's implementation."""
+    import textwrap
+
+    kind = opts['kind']
+    is3d = kind in ('line3d', 'scatter3d', 'surface')
+    colored = kind in ('image', 'intensity', 'scatter-color', 'surface')
+    colors = palette_colors(opts['palette'], len(series))
+    markers = ['o', 's', 'D', '^', 'v', '+', 'x', '*', 'p', 'h']
+    lines = [
+        '#!/usr/bin/env python3',
+        '"""Editable plot generated by mplot.',
+        '',
+        'Requires NumPy and Matplotlib >= 3.7; does not require mplot.',
+        'Run: python3 figure.py [--no-gui] [--export figure.pdf]',
+        'Edit the data below and the Matplotlib calls in create_figure().',
+        '"""',
+        'import numpy as np',
+    ]
+    if opts['link']:
+        if kind != 'image' and any('math.' in script_column(part)
+                                   for item in series for part in item['spec'].split(':')):
+            lines.append('import math')
+        if any(path.endswith('.gz') for path, _ in files):
+            lines.append('import gzip')
+    if colored:
+        lines.append('from matplotlib.colors import LogNorm' if opts['clog']
+                     else 'from matplotlib.colors import Normalize')
+
+    def add(text=''):
+        lines.append(text)
+
+    def array(name, values):
+        """One table row per source row, with whitespace-delimited numbers."""
+        add(f'{name} = np.array([')
+        for row in values:
+            numbers = ', '.join(repr(float(value)) for value in row)
+            add(f'    [{numbers}],')
+        add('], dtype=float)')
+
+    add()
+    add('# 1. Data. Columns are identified below; values retain float64 precision.')
+    if opts['link']:
+        add('# These source paths are absolute. Edit them if you move the data files.')
+        for i, (path, _) in enumerate(files, 1):
+            add(f'SOURCE_{i} = {str(Path(path).resolve())!r}')
+        add()
+        add(textwrap.dedent('''\
+            def read_data(path):
+                """Read numeric blocks, including comments and Fortran D exponents."""
+                blocks = []
+                rows = []
+                OPEN_STREAM
+                with stream:
+                    for line_number, line in enumerate(stream, start=1):
+                        text = line.strip()
+                        if not text or text == '&':
+                            if rows:
+                                blocks.append(np.array(rows, dtype=float))
+                                rows = []
+                            continue
+                        if text.startswith(('#', '@')):
+                            continue
+                        try:
+                            row = [float(v.replace('D', 'E').replace('d', 'e'))
+                                   for v in text.split('#', 1)[0].split()]
+                        except ValueError as exc:
+                            raise ValueError(f'{path}:{line_number}: invalid numeric row') from exc
+                        if rows and len(row) != len(rows[0]):
+                            raise ValueError(f'{path}:{line_number}: inconsistent column count')
+                        rows.append(row)
+                if rows:
+                    blocks.append(np.array(rows, dtype=float))
+                if not blocks:
+                    raise ValueError(f'{path}: no numeric data')
+                return blocks
+            ''').replace('OPEN_STREAM',
+                         "stream = gzip.open(path, 'rt') if path.endswith('.gz') else open(path)"
+                         if any(path.endswith('.gz') for path, _ in files)
+                         else 'stream = open(path)'))
+    else:
+        for i, item in enumerate(series, 1):
+            source = f'{item["path"]}, block {item["block"]}, selection {item["spec"]}'
+            add('# ' + source.replace('\n', ' ').replace('\r', ' '))
+            if kind == 'image':
+                array(f'image_{i}', item['cols'])
+            elif kind in ('intensity', 'surface'):
+                xs, ys, grid = rectangular_grid(item['cols'])
+                add(f'x_{i} = np.array({xs.tolist()!r}, dtype=float)')
+                add(f'y_{i} = np.array({ys.tolist()!r}, dtype=float)')
+                add('# Rows follow y; columns follow x.')
+                array(f'z_{i}', grid)
+            else:
+                headings = ['x', 'y']
+                if kind != 'xy':
+                    headings.append('z')
+                elif item['state']['stype'] == 'xydxdy':
+                    headings.extend(['x_error', 'y_error'])
+                elif item['state']['stype'] != 'xy':
+                    headings.append('x_error' if item['state']['stype'] == 'xydx' else 'y_error')
+                add('# Columns: ' + ', '.join(headings))
+                array(f'data_{i}', zip(*item['cols']))
+            add()
+
+    if opts['link'] and kind in ('intensity', 'surface'):
+        add(textwrap.dedent('''\
+            def make_grid(x, y, z):
+                """Reorder a complete rectangular grid without interpolating."""
+                xs = np.unique(x)
+                ys = np.unique(y)
+                if len(xs) < 2 or len(ys) < 2:
+                    raise ValueError('Grid needs at least two x and y coordinates')
+                if len(set(zip(x, y))) != len(x):
+                    raise ValueError('Duplicate grid coordinates')
+                if len(x) != len(xs) * len(ys):
+                    raise ValueError('Incomplete rectangular grid')
+                grid = np.empty((len(ys), len(xs)))
+                grid[np.searchsorted(ys, y), np.searchsorted(xs, x)] = z
+                return xs, ys, grid
+            '''))
+
+    add()
+    add('def create_figure():')
+    add('    """Change labels, limits and styles directly in the calls below."""')
+    add('    import matplotlib.pyplot as plt')
+    add()
+    add('    # 2. Figure dimensions in inches (100 dpi).')
+    size = (opts['size'][0] / 100, opts['size'][1] / 100)
+    if is3d:
+        add(f"    fig = plt.figure(figsize={size!r}, layout='constrained')")
+        add("    with plt.rc_context({'grid.color': '#eeeeee', 'grid.linewidth': 0.6}):")
+        add("        ax = fig.add_subplot(111, projection='3d')")
+    else:
+        add(f"    fig, ax = plt.subplots(figsize={size!r}, layout='constrained')")
+    if kind == 'xy' or (opts['legend'] and kind in ('line3d', 'scatter3d')):
+        add('    curves = []  # Used only by the mouse interactions at the end.')
+    add()
+    add('    # 3. Prepare coordinates and draw the plot.')
+    if opts['link']:
+        for i, (path, _) in enumerate(files, 1):
+            add(f'    blocks_{i} = read_data(SOURCE_{i})')
+            if kind in ('image', 'intensity', 'surface'):
+                add(f'    blocks_{i} = [np.concatenate(blocks_{i}, axis=0)]')
+        # A changing number of blocks or -uall columns must update curves and palette.
+        counts = []
+        for i, (_, state) in enumerate(files, 1):
+            n = f'(block.shape[1] - 1)' if state['all'] else str(len(state['using'] or [None]))
+            counts.append(f'sum({n} for block in blocks_{i})')
+        add('    curve_count = ' + ' + '.join(counts))
+        if opts['palette']:
+            palette = PALETTES.get(opts['palette'], opts['palette'].split(':'))
+            resolved = [stop if stop.startswith('#') else color_names()[stop] for stop in palette]
+            if len(resolved) == 1:
+                resolved *= 2
+            add('    from matplotlib.colors import LinearSegmentedColormap, to_hex')
+            add(f'    palette = LinearSegmentedColormap.from_list("curves", {resolved!r}, N=65536)')
+            add('    colors = [to_hex(palette(i / max(curve_count - 1, 1)))')
+            add('              for i in range(curve_count)]')
+        else:
+            add(f'    colors = {list(DEFAULT_SERIES_COLORS)!r}')
+        add('    curve_index = 0')
+
+    # Share color normalization, including data-dependent limits on linked inputs.
+    if colored:
+        if opts['link']:
+            if kind == 'image':
+                add('    color_values = blocks_1[0].ravel()')
+            else:
+                color_exprs = []
+                for i, (_, state) in enumerate(files, 1):
+                    using = state['using'] if state['explicit_using'] else ['1:2:3']
+                    for selection in using:
+                        z_expr = script_column(selection.split(':')[2], 'block')
+                        color_exprs.append(f'[{z_expr} for block in blocks_{i}]')
+                add('    color_values = np.concatenate(' + ' + '.join(color_exprs) + ')')
+            add('    if not np.all(np.isfinite(color_values)):')
+            add("        raise ValueError('Non-finite color values')")
+            if opts['clog']:
+                add('    if np.any(color_values <= 0):')
+                add("        raise ValueError('Logarithmic colors require positive values')")
+            if opts['clim']:
+                add(f'    color_min, color_max = {opts["clim"]!r}')
+            else:
+                add('    color_min = float(color_values.min())')
+                add('    color_max = float(color_values.max())')
+                add('    if color_min == color_max:')
+                if opts['clog']:
+                    add('        color_min, color_max = color_min / 2, color_max * 2')
+                else:
+                    add('        color_min, color_max = color_min - 0.5, color_max + 0.5')
+        else:
+            values = [v for item in series for row in item['cols'] for v in row] if kind == 'image' else [v for item in series for v in item['cols'][2]]
+            lo, hi = opts['clim'] or (min(values), max(values))
+            if lo == hi:
+                lo, hi = (lo / 2, hi * 2) if opts['clog'] else (lo - 0.5, hi + 0.5)
+            add('    # Edit these bounds to change the color scale.')
+            add(f'    color_min, color_max = {lo!r}, {hi!r}')
+        norm = 'LogNorm' if opts['clog'] else 'Normalize'
+        add(f'    color_scale = {norm}(vmin=color_min, vmax=color_max)')
+        add()
+
+    def label_for(item):
+        state = item['state']
+        if state['legend_label'] is not None:
+            return state['legend_label']
+        path = Path(item['path'])
+        label = str(path.parent) if opts['legend'] == 'directory' else path.name
+        if opts['legend'] == 'directory' and opts['dirs']:
+            label = str(Path(*path.parent.parts[:opts['dirs']]))
+        if item['blocks'] > 1:
+            label += f' set {item["block"]}'
+        return label + ' ' + item['spec']
+
+    def draw(state, label, color, marker, indent='    '):
+        """Emit only the Matplotlib call needed for this plot type."""
+        def emit(text=''):
+            add(indent + text if text else '')
+        style = [f'color={color}', f'linewidth={state["linewidth"]!r}',
+                 f'linestyle={"None" if state["style"] == "p" else "-"!r}',
+                 f'marker={marker}', f'markersize={3 * state["pointsize"]!r}',
+                 f'label={label}']
+        if kind in ('xy', 'line3d'):
+            errors = []
+            if kind == 'xy':
+                if state['stype'] in ('xydx', 'xydxdy'):
+                    errors.append('xerr=x_error')
+                if state['stype'] in ('xydy', 'xydxdy'):
+                    errors.append('yerr=y_error')
+            coordinates = 'x, y, z' if kind == 'line3d' else 'x, y'
+            emit(f'{"errorbars = ax.errorbar" if errors else "line, = ax.plot"}(')
+            emit('    ' + coordinates + ',')
+            for param in errors + style:
+                emit('    ' + param + ',')
+            emit(')')
+            if errors:
+                emit('line = errorbars.lines[0]')
+                emit('members = [line, *errorbars.lines[1], *errorbars.lines[2]]')
+            else:
+                emit('members = [line]')
+            if kind == 'xy':
+                emit('line.set_picker(5)  # Click within five points of a data point.')
+            if kind == 'xy' or opts['legend']:
+                emit('curves.append((line, members))')
+        elif kind == 'scatter3d':
+            emit('points = ax.scatter(')
+            emit(f'    x, y, z, color={color}, s={(3 * state["pointsize"]) ** 2!r},')
+            emit(f'    label={label},')
+            emit(')')
+            if opts['legend']:
+                emit('curves.append((points, [points]))')
+        else:
+            method = {'image': 'imshow', 'intensity': 'pcolormesh',
+                      'surface': 'plot_surface', 'scatter-color': 'scatter'}[kind]
+            if kind == 'surface':
+                emit('xx, yy = np.meshgrid(x, y)')
+            emit(f'colored_plot = ax.{method}(')
+            coords = {'image': 'image', 'intensity': 'x, y, z',
+                      'surface': 'xx, yy, z', 'scatter-color': 'x, y, c=z'}[kind]
+            emit('    ' + coords + ',')
+            emit(f'    cmap={opts["cmap"]!r}, norm=color_scale,')
+            if kind == 'image':
+                emit(f'    origin="lower", extent={opts["extent"]!r},')
+                emit(f'    interpolation="nearest", aspect={opts["aspect"]!r},')
+            elif kind == 'intensity':
+                emit('    shading="nearest",  # Cells are centered on the samples.')
+            elif kind == 'surface':
+                emit('    rcount=len(y), ccount=len(x),  # Keep all grid points.')
+            else:
+                emit(f'    s={(3 * state["pointsize"]) ** 2!r},')
+            emit(')')
+
+    if not opts['link']:
+        for i, item in enumerate(series, 1):
+            state = item['state']
+            add('    # ' + label_for(item).replace('\n', ' ').replace('\r', ' '))
+            if kind == 'image':
+                add(f'    image = image_{i}')
+            elif kind in ('intensity', 'surface'):
+                add(f'    x, y, z = x_{i}, y_{i}, z_{i}')
+            else:
+                names = ['x', 'y']
+                if kind != 'xy':
+                    names.append('z')
+                elif state['stype'] == 'xydxdy':
+                    names.extend(['x_error', 'y_error'])
+                elif state['stype'] != 'xy':
+                    names.append('x_error' if state['stype'] == 'xydx' else 'y_error')
+                for column, name in enumerate(names):
+                    add(f'    {name} = data_{i}[:, {column}]')
+            symbol = state['symbol']
+            marker = markers[(symbol - 1 if symbol else i - 1) % len(markers)] if state['style'] != 'l' and symbol != 0 else None
+            draw(state, repr(label_for(item)), repr(colors[i - 1]), repr(marker))
+            add()
+    else:
+        for i, (path, state) in enumerate(files, 1):
+            add(f'    # Source {i}: change column selections and formulas here.')
+            add(f'    for block_number, data in enumerate(blocks_{i}, start=1):')
+            if state['all']:
+                add('        if data.shape[1] < 2:')
+                add("            raise ValueError('-uall requires at least two columns')")
+                add('        for y_column in range(1, data.shape[1]):')
+                selections = [('1:dynamic', ['data[:, 0]', 'data[:, y_column]'], '            ')]
+            else:
+                expected = 3 if kind != 'xy' else (4 if state['stype'] == 'xydxdy' else 2 if state['stype'] == 'xy' else 3)
+                specs = state['using'] if state['explicit_using'] and state['using'] else [':'.join(map(str, range(1, expected + 1)))]
+                selections = [(selection, [script_column(part) for part in selection.split(':')], '        ')
+                              for selection in specs] if kind != 'image' else [('matrix', [], '        ')]
+            for selection, expressions, indent in selections:
+                def emit(text):
+                    add(indent + text)
+                if kind == 'image':
+                    emit('image = data')
+                    names = ['image']
+                else:
+                    names = ['x', 'y']
+                    if kind != 'xy':
+                        names.append('z')
+                    elif state['stype'] == 'xydxdy':
+                        names.extend(['x_error', 'y_error'])
+                    elif state['stype'] != 'xy':
+                        names.append('x_error' if state['stype'] == 'xydx' else 'y_error')
+                    for name, value in zip(names, expressions):
+                        if name == 'x' and state['using'] is None and kind == 'xy' and state['stype'] == 'xy':
+                            value = f'{value} if data.shape[1] > 1 else np.arange(len(data), dtype=float)'
+                        if name == 'y' and state['using'] is None and kind == 'xy' and state['stype'] == 'xy':
+                            value = f'{value} if data.shape[1] > 1 else data[:, 0]'
+                        emit(f'{name} = {value}')
+                    if state['shift']:
+                        emit(f'y = y + {state["shift"]!r} * curve_index')
+                emit('if not all(np.all(np.isfinite(values)) for values in [' + ', '.join(names) + ']):')
+                emit("    raise ValueError('Non-finite data or expression result')")
+                for name in names:
+                    if name.endswith('_error'):
+                        emit(f'if np.any({name} < 0):')
+                        emit("    raise ValueError('Negative error bars')")
+                for axis in ('x', 'y', 'z') if is3d else ('x', 'y'):
+                    if opts.get('l' + axis) and kind != 'image':
+                        emit(f'if np.any({axis} <= 0):')
+                        emit(f"    raise ValueError('Logarithmic {axis} requires positive coordinates')")
+                if kind in ('intensity', 'surface'):
+                    emit('x, y, z = make_grid(x, y, z)')
+                if state['legend_label'] is not None:
+                    label = repr(state['legend_label'])
+                else:
+                    item = dict(path=path, state=state, block=1, blocks=1, spec='')
+                    base = label_for(item).rstrip()
+                    emit(f'label = {base!r}')
+                    emit(f'if len(blocks_{i}) > 1:')
+                    emit('    label += f" set {block_number}"')
+                    if state['all']:
+                        emit('label += f" 1:{y_column + 1}"')
+                    else:
+                        emit(f'label += {" " + selection!r}')
+                    label = 'label'
+                if state['style'] != 'l' and state['symbol'] != 0:
+                    marker = repr(markers[(state['symbol'] - 1) % len(markers)]) if state['symbol'] else f'{markers!r}[curve_index % 10]'
+                else:
+                    marker = 'None'
+                draw(state, label, 'colors[curve_index % len(colors)]', marker, indent)
+                emit('curve_index += 1')
+                add()
+
+    if colored:
+        add('    fig.colorbar(colored_plot, ax=ax, label=' + repr(opts['cbt']) + ')')
+        add()
+    add('    # 4. Labels, scales and limits. Uncomment limits to fix the visible range.')
+    add('    # Very light gray grid; use ax.grid(False) to remove it.')
+    if is3d:
+        add(f'    ax.grid({opts["grid"]!r})')
+    else:
+        add('    ax.set_axisbelow(True)')
+        if opts['grid']:
+            add("    ax.grid(True, color='#eeeeee', linewidth=0.6)")
+        else:
+            add('    ax.grid(False)')
+    add(f'    ax.set_title({opts["title"]!r})')
+    add(f'    ax.set_xlabel({opts["xt"]!r})')
+    add(f'    ax.set_ylabel({opts["yt"]!r})')
+    if is3d:
+        add(f'    ax.set_zlabel({opts["zt"]!r})')
+    elif kind != 'image':
+        add(f'    ax.set_aspect({opts["aspect"]!r})')
+    for axis in ('x', 'y', 'z') if is3d else ('x', 'y'):
+        if opts.get('l' + axis):
+            add(f'    ax.set_{axis}scale("log")')
+        if opts.get(axis):
+            add(f'    ax.set_{axis}lim{opts[axis]!r}')
+        else:
+            add(f'    # ax.set_{axis}lim(0, 1)')
+    if opts['legend'] and kind in ('xy', 'line3d', 'scatter3d'):
+        add('    legend = ax.legend(handles=[curve for curve, _ in curves])')
+        add('    enable_legend_toggle(fig, legend, curves)')
+    if kind == 'xy':
+        add('    enable_point_inspection(fig, ax, curves)')
+    add('    return fig, ax')
+    add()
+    add()
+    if kind == 'xy' or (opts['legend'] and kind in ('line3d', 'scatter3d')):
+        add('# 5. Optional mouse interactions. Remove these calls/functions if not needed.')
+    if opts['legend'] and kind in ('xy', 'line3d', 'scatter3d'):
+        add(textwrap.dedent('''\
+            def enable_legend_toggle(fig, legend, curves):
+                """Click a legend symbol to show/hide a curve and its error bars."""
+                mapping = {}
+                for symbol, (_, members) in zip(legend.legend_handles, curves):
+                    symbol.set_picker(5)
+                    mapping[symbol] = members
+
+                def on_pick(event):
+                    if event.artist not in mapping:
+                        return
+                    members = mapping[event.artist]
+                    visible = not members[0].get_visible()
+                    for member in members:
+                        member.set_visible(visible)
+                    event.artist.set_alpha(1 if visible else 0.2)
+                    fig.canvas.draw_idle()
+
+                fig.canvas.mpl_connect('pick_event', on_pick)
+            '''))
+    if kind == 'xy':
+        add(textwrap.dedent('''\
+            def enable_point_inspection(fig, ax, curves):
+                """Click near an XY point to display its index and coordinates."""
+                note = ax.annotate(
+                    '', xy=(0, 0), xytext=(12, 12), textcoords='offset points',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.9),
+                )
+                note.set_visible(False)
+
+                def on_pick(event):
+                    for curve, _ in curves:
+                        if event.artist is not curve or not len(event.ind):
+                            continue
+                        index = int(event.ind[0])
+                        x, y = curve.get_data()
+                        note.xy = (x[index], y[index])
+                        note.set_text(
+                            f'{curve.get_label()}\\n'
+                            f'index={index}, x={x[index]:.8g}, y={y[index]:.8g}'
+                        )
+                        note.set_visible(True)
+                        fig.canvas.draw_idle()
+                        break
+
+                fig.canvas.mpl_connect('pick_event', on_pick)
+            '''))
+    add(textwrap.dedent('''\
+        # 6. Run the figure or export it without opening a window.
+        # For permanent edits, change create_figure() above; no mplot options are needed.
+        if __name__ == '__main__':
+            import argparse
+            import matplotlib
+
+            parser = argparse.ArgumentParser(description=__doc__)
+            parser.add_argument('--no-gui', action='store_true')
+            parser.add_argument('--export', help='Output image: PDF, SVG, PNG, ...')
+            args = parser.parse_args()
+            if args.no_gui:
+                matplotlib.use('Agg')
+
+            import matplotlib.pyplot as plt
+
+            fig, ax = create_figure()
+            if args.export:
+                fig.savefig(args.export, bbox_inches='tight')
+            if not args.no_gui:
+                plt.show()
+        '''))
+    return '\n'.join(lines)
+
+
+
+def main(argv=None):
+    opts,files,state=parse(sys.argv[1:] if argv is None else argv)
+    if not files:
+        if sys.stdin.isatty():raise PlotError('provide input files or pipe numeric data')
+        files=[('-',state)]
+    if sum(path=='-' for path,_ in files)>1:raise PlotError('stdin may be read only once')
+    if opts['link'] and any(path=='-' for path,_ in files):
+        raise PlotError('--link-data cannot reference stdin; use embedded mode')
+    if opts['extent'] and opts['kind']!='image':raise PlotError('--extent is only for image')
+    if not opts['gui']:
+        import matplotlib
+        matplotlib.use('Agg')
+    inputs={Path(path).resolve() for path,_ in files if path!='-'}
+    for destination in (opts['save'],opts['export']):
+        if destination and Path(destination).resolve() in inputs:
+            raise PlotError('output must not overwrite an input file')
+    series=prepare_series(opts,files)
+    fig,ax=build_figure(opts,series)
+    script=make_script(opts,files,series)
+    if opts['save']:
+        output=Path(opts['save']).absolute()
+        if opts['link'] and any(output==Path(p).resolve() for p,_ in files):
+            raise PlotError('project output must not overwrite a linked input')
+        output.write_text(script,encoding='utf-8')
+    else:
+        with tempfile.NamedTemporaryFile(mode='w',prefix='mplot-',suffix='.py',delete=False,encoding='utf-8') as stream:
+            stream.write(script);output=Path(stream.name)
+    if opts['export']:fig.savefig(opts['export'],bbox_inches='tight')
+    if opts['show']:print(script,end='')
+    print(output)
+    import matplotlib.pyplot as plt
+    if opts['gui']:
+        import matplotlib
+        if 'agg' == matplotlib.get_backend().lower():
+            raise PlotError(f'no interactive backend available; project saved in {output}; use --no-gui or configure a GUI backend')
+        plt.show()
+    plt.close(fig)
+    return 0
+
+
+if __name__=='__main__':
+    try:
+        sys.exit(main())
+    except (PlotError,OSError,ValueError,EOFError,UnicodeError) as exc:
+        print(f'mplot: {exc}',file=sys.stderr);sys.exit(2)
+    except ImportError as exc:
+        print(f'mplot: install NumPy and Matplotlib in this Python environment: {exc}',file=sys.stderr);sys.exit(2)
+    except KeyboardInterrupt:
+        sys.exit(130)

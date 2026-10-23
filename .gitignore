@@ -1,4 +1,5 @@
+__pycache__/
 *~
 install.sh
+test
 test/
-__pycache__/
