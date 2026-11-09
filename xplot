@@ -1007,6 +1007,7 @@ $progN = "";
 $progE = "";
 $prog  = "";
 $with = "l";			# define whether to use lines 
+$pointsize = 1.3;		# default symbol size; override with -psN
 $lcount=-1;
 $numsets=0;
 $cstart='black';

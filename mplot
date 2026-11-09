@@ -160,7 +160,7 @@ def numeric_pair(text, option):
 
 def initial_state():
     return dict(using=['1:2'], all=False, stype='xy', style='lp', symbol=None,
-                linewidth=2.0, pointsize=1.0, shift=None, legend_label=None, explicit_using=False)
+                linewidth=2.0, pointsize=2.5, shift=None, legend_label=None, explicit_using=False)
 
 
 def parse(argv):

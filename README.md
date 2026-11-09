@@ -62,7 +62,7 @@ Column numbers start at **1**. Quote formulas with **single quotes** to protect
 | `-xMIN:MAX`, `-yMIN:MAX`, `-lx`, `-ly` | Axis limits and logarithmic scales |
 | `-tTEXT`, `-xtTEXT`, `-ytTEXT` | Title and axis labels (`-t` is a subtitle in Grace) |
 | `-l`, `-d[N]` | Legend using filenames or directories |
-| `-wl`, `-wp`, `-wlp[:N]`, `-lwN`, `-psN` | Lines, points, symbol number, line width and symbol size |
+| `-wl`, `-wp`, `-wlp[:N]`, `-lwN`, `-psN` | Lines, points, symbol number, line width and symbol size (default `-ps1.3`) |
 | `-kN`, `-cSCHEME` | Vertical curve offset and curve color palette |
 | `-sFILE`, `-show` | Save a project; print generated commands/project/script |
 
