@@ -21,7 +21,8 @@ Blank lines separate XY curves. Gzip and Fortran D exponents are accepted.
   -tTEXT -xtTEXT -ytTEXT         title and axis labels (Matplotlib mathtext)
   -l -d[N] -LTEXT               filename/directory/custom legend
   -wl|-wp|-wlp[:N] -lwN -psN    style, width, marker size (3*N points)
-  -kN -cSCHEME -clist           Y shift, curve palette, color list
+  -kN -cSCHEME -clist           Y shift, curve palette or Matplotlib colormap
+  -cmlist                       show Matplotlib colormap bars in an ANSI terminal
   -mWIDTH:HEIGHT                figure size in pixels at 100 dpi
   -sFILE                       save editable standalone Python project
   -show                        print generated script (still opens GUI)
@@ -158,7 +159,7 @@ def numeric_pair(text, option):
 
 
 def initial_state():
-    return dict(using=['1:2'], all=False, stype='xy', style='l', symbol=None,
+    return dict(using=['1:2'], all=False, stype='xy', style='lp', symbol=None,
                 linewidth=2.0, pointsize=1.0, shift=None, legend_label=None, explicit_using=False)
 
 
@@ -186,6 +187,17 @@ def parse(argv):
         if arg == '-clist':
             colors = color_names()
             print('\n'.join(sorted(colors)))
+            raise SystemExit(0)
+        if arg == '-cmlist':
+            import matplotlib as mpl
+            from matplotlib.colors import to_rgb
+            names = sorted(mpl.colormaps)
+            for name in names:
+                cmap = mpl.colormaps[name]
+                bar = ''.join(
+                    '\033[48;2;{};{};{}m '.format(*(round(255 * v) for v in to_rgb(cmap(i / 39))))
+                    for i in range(40))
+                print(f'{name:24s} {bar}\033[0m')
             raise SystemExit(0)
         key, sep, inline = arg.partition('=')
         if key in ('--type', '--cmap', '--clim', '--extent', '--aspect', '--export', '--cb-label', '--zt', '--z', '--stack-values', '--stack-axis', '--interpolate'):
@@ -371,6 +383,11 @@ def read_blocks(path):
 def palette_colors(value, n):
     if value is None:
         return [DEFAULT_SERIES_COLORS[i % len(DEFAULT_SERIES_COLORS)] for i in range(n)]
+    import matplotlib as mpl
+    if value in mpl.colormaps:
+        cmap = mpl.colormaps[value]
+        return ['#%02x%02x%02x' % tuple(round(255 * v) for v in cmap(i / max(n - 1, 1))[:3])
+                for i in range(n)]
     colors = color_names()
     stops = PALETTES.get(value, value.split(':'))
     rgb = []
@@ -587,6 +604,9 @@ def build_figure(opts, series):
         marker=markers[(symbol-1 if symbol else i)%len(markers)] if state['style']!='l' and symbol!=0 else None
         style=dict(color=colors[i],linewidth=state['linewidth'],marker=marker,
                    markersize=3*state['pointsize'],linestyle='None' if state['style']=='p' else '-',label=label)
+        if marker is not None:
+            style['markerfacecolor']='none'
+            style['markeredgewidth']=0.8
         if kind=='xy':
             x,y,*errors=cols
             if errors:
@@ -916,14 +936,20 @@ def make_script(opts, files, series):
             counts.append(f'sum({n} for block in blocks_{i})')
         add('    curve_count = ' + ' + '.join(counts))
         if opts['palette']:
+            add('    import matplotlib as mpl')
+            add(f'    if {opts["palette"]!r} in mpl.colormaps:')
+            add(f'        cmap = mpl.colormaps[{opts["palette"]!r}]')
+            add('        colors = [mpl.colors.to_hex(cmap(i / max(curve_count - 1, 1)))')
+            add('                  for i in range(curve_count)]')
+            add('    else:')
             palette = PALETTES.get(opts['palette'], opts['palette'].split(':'))
             resolved = [stop if stop.startswith('#') else color_names()[stop] for stop in palette]
             if len(resolved) == 1:
                 resolved *= 2
-            add('    from matplotlib.colors import LinearSegmentedColormap, to_hex')
-            add(f'    palette = LinearSegmentedColormap.from_list("curves", {resolved!r}, N=65536)')
-            add('    colors = [to_hex(palette(i / max(curve_count - 1, 1)))')
-            add('              for i in range(curve_count)]')
+            add('        from matplotlib.colors import LinearSegmentedColormap, to_hex')
+            add(f'        palette = LinearSegmentedColormap.from_list("curves", {resolved!r}, N=65536)')
+            add('        colors = [to_hex(palette(i / max(curve_count - 1, 1)))')
+            add('                  for i in range(curve_count)]')
         else:
             add(f'    colors = {list(DEFAULT_SERIES_COLORS)!r}')
         add('    curve_index = 0')
@@ -989,6 +1015,8 @@ def make_script(opts, files, series):
                  f'linestyle={"None" if state["style"] == "p" else "-"!r}',
                  f'marker={marker}', f'markersize={3 * state["pointsize"]!r}',
                  f'label={label}']
+        if marker != 'None':
+            style.extend(['markerfacecolor="none"', 'markeredgewidth=0.8'])
         if kind in ('xy', 'line3d'):
             errors = []
             if kind == 'xy':
